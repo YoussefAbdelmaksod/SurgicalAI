@@ -1,0 +1,34 @@
+{
+  "info": {
+    "description": "SurgicalAI Tool Detection Dataset"
+  },
+  "images": [],
+  "annotations": [],
+  "categories": [
+    {
+      "id": 1,
+      "name": "Grasper",
+      "supercategory": "Tool"
+    },
+    {
+      "id": 2,
+      "name": "Scissors",
+      "supercategory": "Tool"
+    },
+    {
+      "id": 3,
+      "name": "Clipper",
+      "supercategory": "Tool"
+    },
+    {
+      "id": 4,
+      "name": "Hook",
+      "supercategory": "Tool"
+    },
+    {
+      "id": 5,
+      "name": "Irrigator",
+      "supercategory": "Tool"
+    }
+  ]
+}

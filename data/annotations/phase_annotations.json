@@ -1,0 +1,68 @@
+{
+  "phases": {
+    "preparation": {
+      "start_time": 0,
+      "end_time": 120
+    },
+    "calot_triangle_dissection": {
+      "start_time": 120,
+      "end_time": 600
+    },
+    "clipping_and_cutting": {
+      "start_time": 600,
+      "end_time": 840
+    },
+    "gallbladder_dissection": {
+      "start_time": 840,
+      "end_time": 1620
+    },
+    "gallbladder_packaging": {
+      "start_time": 1620,
+      "end_time": 1800
+    },
+    "cleaning_and_coagulation": {
+      "start_time": 1800,
+      "end_time": 2040
+    },
+    "gallbladder_extraction": {
+      "start_time": 2040,
+      "end_time": 2220
+    }
+  },
+  "video_files": {
+    "Laparoscopic Cholecystectomy High Definition Full Length Video.mp4": {
+      "duration": 2220,
+      "fps": 30,
+      "phases": {
+        "preparation": [
+          0,
+          120
+        ],
+        "calot_triangle_dissection": [
+          120,
+          600
+        ],
+        "clipping_and_cutting": [
+          600,
+          840
+        ],
+        "gallbladder_dissection": [
+          840,
+          1620
+        ],
+        "gallbladder_packaging": [
+          1620,
+          1800
+        ],
+        "cleaning_and_coagulation": [
+          1800,
+          2040
+        ],
+        "gallbladder_extraction": [
+          2040,
+          2220
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,171 @@
+# SurgicalAI Training Configuration
+
+# General training settings
+training:
+  # Global training parameters
+  num_workers: 4  # Number of data loading workers
+  val_frequency: 1  # Validate every n epochs
+  save_best_only: true  # Only save the best model
+  early_stopping_patience: 10  # Number of epochs to wait for improvement before stopping
+  mixed_precision: true  # Use mixed precision training
+  
+  # Tool Detection training parameters
+  tool_detection:
+    batch_size: 8
+    epochs: 50
+    learning_rate: 0.0001
+    weight_decay: 0.0001
+    augmentation_level: 'medium'  # Options: 'light', 'medium', 'heavy'
+    lr_scheduler:
+      use_scheduler: true
+      scheduler_type: 'warmup_cosine'  # Options: 'cosine', 'step', 'multistep', 'warmup_cosine', 'cyclic_cosine', 'plateau'
+      warmup_epochs: 3
+      eta_min: 0.000001
+  
+  # Phase Recognition training parameters
+  phase_recognition:
+    batch_size: 16
+    epochs: 100
+    learning_rate: 0.0001
+    weight_decay: 0.00001
+    sequence_length: 16  # Number of frames in sequence
+    temporal_stride: 2  # Stride between frames in sequence
+    augmentation_level: 'medium'
+    lr_scheduler:
+      use_scheduler: true
+      scheduler_type: 'warmup_cosine'
+      warmup_epochs: 5
+      eta_min: 0.000001
+  
+  # Mistake Detection training parameters
+  mistake_detection:
+    batch_size: 12
+    epochs: 80
+    learning_rate: 0.0002
+    weight_decay: 0.00001
+    context_frames: 20  # Number of context frames to use
+    augmentation_level: 'medium'
+    lr_scheduler:
+      use_scheduler: true
+      scheduler_type: 'warmup_cosine'
+      warmup_epochs: 5
+      eta_min: 0.000001
+  
+  # GPT Assistant training parameters
+  gpt_assistant:
+    batch_size: 8
+    epochs: 30
+    learning_rate: 0.00005
+    weight_decay: 0.0001
+    context_length: 512  # Maximum context length for GPT
+    lr_scheduler:
+      use_scheduler: true
+      scheduler_type: 'warmup_cosine'
+      warmup_epochs: 2
+      eta_min: 0.000001
+
+# Model architecture settings
+model:
+  # Tool Detection model settings
+  tool_detection:
+    architecture: 'faster_rcnn'  # Options: 'faster_rcnn', 'retinanet'
+    backbone: 'resnet50'  # Options: 'resnet50', 'resnet101', 'efficientnet-b4'
+    use_fpn: true  # Use Feature Pyramid Network
+    image_size: 800  # Input image size
+    confidence_threshold: 0.5  # Confidence threshold for detections
+    nms_threshold: 0.5  # Non-maximum suppression threshold
+  
+  # Phase Recognition model settings
+  phase_recognition:
+    architecture: 'vit_lstm'  # Options: 'vit_lstm', 'vit_transformer'
+    vit_model: 'vit_base_patch16_224'
+    hidden_dim: 512
+    lstm_layers: 2
+    dropout: 0.3
+    bidirectional: true
+    image_size: 224
+    num_classes: 7  # Number of surgical phases
+  
+  # Mistake Detection model settings
+  mistake_detection:
+    visual_dim: 768
+    tool_dim: 128
+    hidden_dim: 256
+    num_classes: 3  # Risk levels: low, medium, high
+    use_temporal: true
+    dropout: 0.3
+  
+  # GPT Assistant model settings
+  gpt_assistant:
+    model_name: 'gpt2'  # Options: 'gpt2', 'gpt2-medium'
+    num_visual_tokens: 50
+    num_tool_tokens: 20
+    max_sequence_length: 512
+
+# Data settings
+data:
+  # Tool Detection data settings
+  tool_detection:
+    train_dir: 'train'
+    val_dir: 'valid'
+    test_dir: 'test'
+    annotations_format: 'coco'
+    class_names:
+      0: 'background'
+      1: 'Bipolar'
+      2: 'Clipper'
+      3: 'Grasper'
+      4: 'Hook' 
+      5: 'Irrigator'
+      6: 'Scissors'
+      7: 'Specimen Bag'
+  
+  # Phase Recognition data settings
+  phase_recognition:
+    video_dir: 'videos'
+    frame_dir: 'frames'
+    annotation_file: 'phase_annotations.json'
+    phase_names:
+      0: 'preparation'
+      1: 'calot_triangle_dissection'
+      2: 'clipping_and_cutting'
+      3: 'gallbladder_dissection'
+      4: 'gallbladder_packaging'
+      5: 'cleaning_and_coagulation'
+      6: 'gallbladder_extraction'
+  
+  # Mistake Detection data settings
+  mistake_detection:
+    annotation_file: 'mistake_annotations.json'
+    risk_thresholds:
+      critical: 0.8  # Risk level >= 0.8 is critical
+      major: 0.5     # Risk level 0.5-0.79 is major
+      minor: 0.0     # Risk level < 0.5 is minor
+  
+  # GPT Assistant data settings
+  gpt_assistant:
+    procedure_knowledge_file: 'procedure_knowledge.json'
+    guidance_examples_file: 'guidance_examples.json'
+
+# Evaluation settings
+evaluation:
+  # Tool Detection evaluation settings
+  tool_detection:
+    iou_thresholds: [0.5, 0.75]
+    score_threshold: 0.5
+    max_detections_per_image: 100
+  
+  # Phase Recognition evaluation settings
+  phase_recognition:
+    metrics: ['accuracy', 'precision', 'recall', 'f1']
+    confusion_matrix: true
+  
+  # Mistake Detection evaluation settings
+  mistake_detection:
+    metrics: ['accuracy', 'precision', 'recall', 'f1']
+    risk_weighted_metrics: true  # Weight metrics by risk level
+  
+  # GPT Assistant evaluation settings
+  gpt_assistant:
+    metrics: ['bleu', 'rouge', 'perplexity']
+    human_evaluation_criteria: ['relevance', 'safety', 'clarity'] 

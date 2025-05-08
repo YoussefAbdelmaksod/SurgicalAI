@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SurgicalAI - Laparoscopic Cholecystectomy Assistant</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --primary: #2c3e50;
+            --secondary: #3498db;
+            --accent: #e74c3c;
+            --light: #ecf0f1;
+            --dark: #2c3e50;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
+            color: var(--dark);
+        }
+        
+        .navbar {
+            background-color: var(--primary);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .navbar-brand {
+            font-weight: bold;
+            color: white !important;
+        }
+        
+        .card {
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            border: none;
+        }
+        
+        .card-header {
+            background-color: var(--primary);
+            color: white;
+            font-weight: bold;
+            border-radius: 8px 8px 0 0 !important;
+        }
+        
+        .btn-primary {
+            background-color: var(--secondary);
+            border-color: var(--secondary);
+        }
+        
+        .btn-primary:hover {
+            background-color: #2980b9;
+            border-color: #2980b9;
+        }
+        
+        .btn-danger {
+            background-color: var(--accent);
+            border-color: var(--accent);
+        }
+        
+        .btn-danger:hover {
+            background-color: #c0392b;
+            border-color: #c0392b;
+        }
+        
+        .video-container {
+            border-radius: 8px;
+            overflow: hidden;
+            background-color: #000;
+            position: relative;
+            height: 480px;
+        }
+        
+        #video-feed {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        
+        .alert-warning {
+            background-color: rgba(243, 156, 18, 0.2);
+            border-color: #f39c12;
+            color: #9a7d0a;
+        }
+        
+        .alert-danger {
+            background-color: rgba(231, 76, 60, 0.2);
+            border-color: #e74c3c;
+            color: #a93226;
+        }
+        
+        .alert-info {
+            background-color: rgba(52, 152, 219, 0.2);
+            border-color: #3498db;
+            color: #2874a6;
+        }
+        
+        .phase-indicator {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 5px;
+            background-color: var(--secondary);
+            color: white;
+            font-size: 0.9rem;
+            font-weight: bold;
+            margin-right: 5px;
+        }
+        
+        .tool-indicator {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            background-color: var(--light);
+            color: var(--dark);
+            font-size: 0.8rem;
+            margin-right: 5px;
+            margin-bottom: 5px;
+        }
+        
+        .guidance-container {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark mb-4">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-hospital"></i> SurgicalAI
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="#"><i class="bi bi-camera-video"></i> Live Analysis</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#"><i class="bi bi-file-earmark-medical"></i> Procedure Guide</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#"><i class="bi bi-gear"></i> Settings</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container">
+        <div class="row">
+            <!-- Video Feed and Controls -->
+            <div class="col-lg-8">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-camera-video"></i> Video Analysis</span>
+                        <div>
+                            <span id="status-indicator" class="badge bg-success">Connected</span>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="video-container mb-3">
+                            <img id="video-feed" src="{{ url_for('video_feed') }}" alt="Video Feed">
+                        </div>
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="input-group mb-3">
+                                    <span class="input-group-text">Source</span>
+                                    <select id="video-source" class="form-select">
+                                        <option value="0">Webcam</option>
+                                        <option value="1">External Camera</option>
+                                        <option value="sample.mp4">Sample Video</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-md-6 d-flex gap-2">
+                                <button id="start-btn" class="btn btn-primary flex-grow-1">
+                                    <i class="bi bi-play-fill"></i> Start
+                                </button>
+                                <button id="stop-btn" class="btn btn-danger flex-grow-1" disabled>
+                                    <i class="bi bi-stop-fill"></i> Stop
+                                </button>
+                                <button id="screenshot-btn" class="btn btn-secondary">
+                                    <i class="bi bi-camera"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Analysis Results -->
+            <div class="col-lg-4">
+                <!-- Current Phase -->
+                <div class="card">
+                    <div class="card-header">
+                        <i class="bi bi-diagram-3"></i> Current Phase
+                    </div>
+                    <div class="card-body">
+                        <div id="phase-container">
+                            <span class="phase-indicator">Calot's Triangle Dissection</span>
+                            <span class="text-muted">90% confidence</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Detected Tools -->
+                <div class="card">
+                    <div class="card-header">
+                        <i class="bi bi-tools"></i> Detected Tools
+                    </div>
+                    <div class="card-body">
+                        <div id="tools-container">
+                            <span class="tool-indicator">Grasper (95%)</span>
+                            <span class="tool-indicator">Dissector (87%)</span>
+                            <span class="tool-indicator">Hook (76%)</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Warnings -->
+                <div class="card">
+                    <div class="card-header">
+                        <i class="bi bi-exclamation-triangle"></i> Warnings
+                    </div>
+                    <div class="card-body">
+                        <div id="warnings-container">
+                            <div class="alert alert-warning" role="alert">
+                                <strong>Minor issue:</strong> Excessive traction applied to gallbladder
+                            </div>
+                            <div class="alert alert-info" role="alert">
+                                <strong>Note:</strong> Critical view of safety not yet established
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Guidance -->
+                <div class="card">
+                    <div class="card-header">
+                        <i class="bi bi-lightbulb"></i> Guidance
+                    </div>
+                    <div class="card-body">
+                        <div id="guidance-container" class="guidance-container">
+                            <p>Dissect the peritoneum overlying Calot's triangle. Identify cystic duct and artery with careful blunt dissection. Achieve the critical view of safety before proceeding with clipping.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Performance Summary -->
+        <div class="card mt-3">
+            <div class="card-header">
+                <i class="bi bi-graph-up"></i> Performance Summary
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <div class="d-flex align-items-center mb-2">
+                            <strong class="me-2">Overall Score:</strong>
+                            <div class="progress flex-grow-1" style="height: 10px;">
+                                <div class="progress-bar bg-success" role="progressbar" style="width: 85%"></div>
+                            </div>
+                            <span class="ms-2">85%</span>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="d-flex align-items-center mb-2">
+                            <strong class="me-2">Efficiency:</strong>
+                            <div class="progress flex-grow-1" style="height: 10px;">
+                                <div class="progress-bar bg-primary" role="progressbar" style="width: 70%"></div>
+                            </div>
+                            <span class="ms-2">70%</span>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="d-flex align-items-center mb-2">
+                            <strong class="me-2">Precision:</strong>
+                            <div class="progress flex-grow-1" style="height: 10px;">
+                                <div class="progress-bar bg-info" role="progressbar" style="width: 90%"></div>
+                            </div>
+                            <span class="ms-2">90%</span>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="d-flex align-items-center mb-2">
+                            <strong class="me-2">Safety:</strong>
+                            <div class="progress flex-grow-1" style="height: 10px;">
+                                <div class="progress-bar bg-warning" role="progressbar" style="width: 80%"></div>
+                            </div>
+                            <span class="ms-2">80%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const startBtn = document.getElementById('start-btn');
+            const stopBtn = document.getElementById('stop-btn');
+            const videoSource = document.getElementById('video-source');
+            const statusIndicator = document.getElementById('status-indicator');
+            const screenshotBtn = document.getElementById('screenshot-btn');
+            
+            // Start video processing
+            startBtn.addEventListener('click', function() {
+                const source = videoSource.value;
+                
+                fetch('/api/start_video', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ source: source })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        startBtn.disabled = true;
+                        stopBtn.disabled = false;
+                        statusIndicator.className = 'badge bg-success';
+                        statusIndicator.textContent = 'Connected';
+                        
+                        // Reload video feed
+                        const videoFeed = document.getElementById('video-feed');
+                        videoFeed.src = '/video_feed?' + new Date().getTime();
+                    } else {
+                        alert('Failed to start video: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('An error occurred while starting the video feed');
+                });
+            });
+            
+            // Stop video processing
+            stopBtn.addEventListener('click', function() {
+                fetch('/api/stop_video', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        startBtn.disabled = false;
+                        stopBtn.disabled = true;
+                        statusIndicator.className = 'badge bg-secondary';
+                        statusIndicator.textContent = 'Disconnected';
+                    } else {
+                        alert('Failed to stop video: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('An error occurred while stopping the video feed');
+                });
+            });
+            
+            // Take screenshot
+            screenshotBtn.addEventListener('click', function() {
+                // Capture the current frame and save it
+                const videoFeed = document.getElementById('video-feed');
+                const canvas = document.createElement('canvas');
+                canvas.width = videoFeed.naturalWidth;
+                canvas.height = videoFeed.naturalHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(videoFeed, 0, 0);
+                
+                // Create a download link
+                const link = document.createElement('a');
+                link.href = canvas.toDataURL('image/png');
+                link.download = 'surgicalai_capture_' + new Date().toISOString().replace(/:/g, '-') + '.png';
+                link.click();
+            });
+        });
+    </script>
+</body>
+</html> 

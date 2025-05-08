@@ -1,0 +1,265 @@
+{
+    "procedure_name": "Laparoscopic Cholecystectomy",
+    "procedure_description": "Surgical removal of the gallbladder using minimally invasive laparoscopic techniques.",
+    "procedure_steps": {
+        "preparation": {
+            "description": "Initial setup and port placement for accessing the abdominal cavity.",
+            "key_points": [
+                "Place the patient in the reverse Trendelenburg position with left side tilt",
+                "Create pneumoperitoneum using Veress needle or Hasson technique",
+                "Place four ports: 10mm umbilical, 10mm epigastric, 5mm right subcostal, 5mm right flank",
+                "Perform initial exploration of the abdominal cavity"
+            ],
+            "expected_duration": 120,
+            "recommended_tools": ["Veress needle", "Trocars", "Laparoscope"],
+            "common_mistakes": [
+                "Incorrect port placement",
+                "Insufficient pneumoperitoneum",
+                "Injury to underlying structures during port insertion"
+            ]
+        },
+        "calot_triangle_dissection": {
+            "description": "Careful dissection of Calot's triangle to clearly identify the cystic duct and cystic artery.",
+            "key_points": [
+                "Grasp gallbladder fundus and retract superiorly",
+                "Grasp Hartmann's pouch and retract laterally",
+                "Dissect peritoneum overlying Calot's triangle",
+                "Identify cystic duct and cystic artery",
+                "Obtain the critical view of safety"
+            ],
+            "expected_duration": 480,
+            "recommended_tools": ["Grasper", "Dissector", "Hook"],
+            "critical_view_criteria": [
+                "Clear hepatocystic triangle",
+                "Lower third of gallbladder separated from liver bed",
+                "Two structures entering gallbladder (cystic duct and artery)"
+            ],
+            "common_mistakes": [
+                "Failure to achieve critical view of safety",
+                "Misidentification of common bile duct as cystic duct",
+                "Excessive traction causing avulsion of cystic artery"
+            ]
+        },
+        "clipping_and_cutting": {
+            "description": "Secure placement of clips on the cystic duct and artery, followed by their division.",
+            "key_points": [
+                "Place three clips on cystic duct: two proximal, one distal",
+                "Place two clips on cystic artery: one proximal, one distal",
+                "Cut the cystic duct between the clips",
+                "Cut the cystic artery between the clips",
+                "Verify proper clip placement before cutting"
+            ],
+            "expected_duration": 240,
+            "recommended_tools": ["Clipper", "Scissors"],
+            "common_mistakes": [
+                "Clip migration during cutting",
+                "Cutting too close to proximal clips",
+                "Incomplete clipping of the entire duct diameter",
+                "Failure to check for bile leakage"
+            ]
+        },
+        "gallbladder_dissection": {
+            "description": "Dissection of the gallbladder from the liver bed using electrocautery.",
+            "key_points": [
+                "Use hook electrode with electrocautery for dissection",
+                "Dissect from infundibulum to fundus (antegrade) or fundus to infundibulum (retrograde)",
+                "Stay close to gallbladder to avoid liver injury",
+                "Identify and control small vessels in the liver bed",
+                "Maintain gentle traction on the gallbladder during dissection"
+            ],
+            "expected_duration": 780,
+            "recommended_tools": ["Hook", "Grasper"],
+            "common_mistakes": [
+                "Excessive cautery use causing thermal damage",
+                "Perforation of the gallbladder",
+                "Dissection too deep into liver parenchyma causing bleeding",
+                "Poor traction leading to difficult dissection"
+            ]
+        },
+        "gallbladder_packaging": {
+            "description": "Preparing the gallbladder for removal by placing it in a specimen bag.",
+            "key_points": [
+                "Insert specimen retrieval bag through 10mm port",
+                "Open the bag inside the abdomen",
+                "Place gallbladder into the bag",
+                "Close the bag securely",
+                "Position the bag near extraction site"
+            ],
+            "expected_duration": 180,
+            "recommended_tools": ["Specimen Bag", "Grasper"],
+            "common_mistakes": [
+                "Dropping gallstones during extraction",
+                "Tearing of specimen bag",
+                "Difficulty manipulating bag in limited space"
+            ]
+        },
+        "cleaning_and_coagulation": {
+            "description": "Ensuring hemostasis of the liver bed and cleaning the surgical field.",
+            "key_points": [
+                "Check liver bed for bleeding points",
+                "Apply electrocautery to bleeding vessels",
+                "Irrigate the surgical field with saline",
+                "Suction fluid and debris",
+                "Check for bile leakage or other complications"
+            ],
+            "expected_duration": 240,
+            "recommended_tools": ["Irrigator", "Hook", "Grasper"],
+            "common_mistakes": [
+                "Inadequate hemostasis",
+                "Failure to check all areas of the liver bed",
+                "Insufficient irrigation of the operative field"
+            ]
+        },
+        "gallbladder_extraction": {
+            "description": "Removal of the gallbladder from the abdominal cavity.",
+            "key_points": [
+                "Remove specimen bag with gallbladder through umbilical port",
+                "May need to enlarge port site for larger specimens",
+                "Ensure complete removal of all gallstones",
+                "Check for bleeding at port sites",
+                "Close fascial defects at 10mm port sites",
+                "Close skin at all port sites"
+            ],
+            "expected_duration": 180,
+            "recommended_tools": ["Specimen Bag", "Grasper"],
+            "common_mistakes": [
+                "Fascial defect not closed properly",
+                "Specimen bag breakage during extraction",
+                "Port site bleeding"
+            ]
+        }
+    },
+    "tool_descriptions": {
+        "Grasper": {
+            "description": "Used to grasp and manipulate tissue",
+            "usage": "Hold and reposition gallbladder, retract structures",
+            "safety_tips": [
+                "Avoid excessive compression of vital structures",
+                "Release and reposition periodically to prevent ischemia"
+            ]
+        },
+        "Clipper": {
+            "description": "Applies titanium or polymer clips to secure ducts and vessels",
+            "usage": "Secure cystic duct and artery before division",
+            "safety_tips": [
+                "Ensure the entire diameter of structure is within clip",
+                "Use appropriate size clips for the structure",
+                "Place multiple clips for security"
+            ]
+        },
+        "Scissors": {
+            "description": "Used to cut tissue, sutures, or vessels",
+            "usage": "Divide cystic duct and artery after clipping",
+            "safety_tips": [
+                "Cut between clips, not too close to proximal clip",
+                "Ensure clear visualization before cutting",
+                "Avoid blind cutting"
+            ]
+        },
+        "Hook": {
+            "description": "L-shaped electrocautery instrument",
+            "usage": "Dissect gallbladder from liver bed, divide tissue planes",
+            "safety_tips": [
+                "Use short bursts of energy",
+                "Maintain clear visualization of tip at all times",
+                "Keep distance from vital structures"
+            ]
+        },
+        "Irrigator": {
+            "description": "Delivers saline or water for irrigation and cleaning",
+            "usage": "Clean surgical field, improve visualization, check for leaks",
+            "safety_tips": [
+                "Use appropriate pressure to avoid tissue damage",
+                "Ensure adequate suction while irrigating"
+            ]
+        },
+        "Specimen Bag": {
+            "description": "Retrieval bag for removed organs",
+            "usage": "Contain gallbladder for safe removal",
+            "safety_tips": [
+                "Open fully before placing specimen",
+                "Secure closure before extraction",
+                "Avoid puncturing the bag"
+            ]
+        },
+        "Bipolar": {
+            "description": "Electrosurgical instrument that passes current between two tips",
+            "usage": "Precise coagulation of small vessels",
+            "safety_tips": [
+                "Ensure no other metal instruments touching tissue near application",
+                "Keep field dry during use",
+                "Don't apply near clips"
+            ]
+        }
+    },
+    "complication_management": {
+        "bleeding": {
+            "from_liver_bed": [
+                "Apply direct pressure with gauze",
+                "Selective electrocautery of bleeding points",
+                "Consider topical hemostatic agents if persistent"
+            ],
+            "from_cystic_artery": [
+                "Apply additional clips proximally",
+                "Consider suture ligation if clipping fails",
+                "Maintain clear field with irrigation and suction"
+            ]
+        },
+        "bile_leak": {
+            "identification": [
+                "Observe for bile-colored fluid in operative field",
+                "Source may be cystic duct, accessory duct, or gallbladder perforation"
+            ],
+            "management": [
+                "For cystic duct leaks: reapply clips more proximally",
+                "For small liver bed leaks: electrocautery",
+                "For larger leaks: consider drain placement"
+            ]
+        },
+        "gallbladder_perforation": {
+            "management": [
+                "Control with grasper or clip",
+                "Irrigate to remove spilled bile and stones",
+                "Use specimen bag to prevent further contamination",
+                "Document stone spillage in operative note"
+            ]
+        },
+        "common_bile_duct_injury": {
+            "prevention": [
+                "Obtain critical view of safety",
+                "Avoid excessive traction or dissection",
+                "Consider intraoperative cholangiogram if anatomy unclear"
+            ],
+            "recognition": [
+                "Bile in field after duct division",
+                "Multiple small biliary radicals in liver bed",
+                "Structure larger than expected for cystic duct"
+            ],
+            "management": [
+                "Control injury with clips if small",
+                "Convert to open if large injury or uncertain anatomy",
+                "Consider hepatobiliary surgery consultation"
+            ]
+        }
+    },
+    "critical_decisions": {
+        "conversion_to_open": [
+            "Inability to safely identify anatomy",
+            "Uncontrollable bleeding",
+            "Major biliary injury",
+            "Dense adhesions preventing safe dissection",
+            "Suspicion of malignancy"
+        ],
+        "intraoperative_cholangiogram": [
+            "Unclear biliary anatomy",
+            "History of biliary pancreatitis or jaundice",
+            "Dilated common bile duct on ultrasound",
+            "Suspected common bile duct stones"
+        ],
+        "subtotal_cholecystectomy": [
+            "Severe inflammation in Calot's triangle",
+            "Unable to safely dissect cystic duct",
+            "Dense adhesions to surrounding structures"
+        ]
+    }
+} 

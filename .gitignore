@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Training data and models
+models/weights/**/*.pth
+data/videos/*.mp4
+data/videos/*.ts
+data/train/*.jpg
+data/train/*.png
+data/train_processed/*.jpg
+data/train_processed/*.png
+data/phases/*.jpg
+data/phases/*.png
+
+# Allow empty directories with .gitkeep
+!**/.gitkeep
+!models/weights/tool_detection/.gitkeep
+!models/weights/vit_lstm/.gitkeep
+!models/weights/mistake_detector/.gitkeep
+
+# Logs
+logs/
+*.log

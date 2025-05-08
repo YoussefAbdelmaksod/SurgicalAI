@@ -1,0 +1,148 @@
+# SurgicalAI Default Configuration
+
+# Application settings
+app:
+  log_level: INFO
+  port: 5000
+  host: "0.0.0.0"
+  debug: false
+  video_capture:
+    fps: 30
+    width: 1280
+    height: 720
+    process_every_n_frames: 5
+  
+# Model settings
+model:
+  # Phase recognition model settings
+  phase_recognition:
+    model_type: "vit_lstm"  # Options: "vit_lstm", "vit_transformer"
+    vit_model: "vit_base_patch16_224"
+    hidden_size: 512
+    num_layers: 2
+    num_heads: 8  # For transformer only
+    dropout: 0.3
+    bidirectional: true
+    use_temporal_attention: true
+    freeze_vit: false
+    num_classes: 7  # Number of surgical phases
+  
+  # Tool detection model settings
+  tool_detection:
+    architecture: "faster_rcnn"  # Options: "faster_rcnn", "mask_rcnn", "retinanet"
+    backbone: "resnet50"  # Options: "resnet50", "resnet101", "mobilenet_v3"
+    use_fpn: true
+    pretrained: true
+    use_ensemble: true
+    ensemble_method: "weighted"  # Options: "weighted", "nms"
+    ensemble_weights: [0.6, 0.4]  # Weights for each model in ensemble
+    score_threshold: 0.5
+    nms_threshold: 0.5
+    num_classes: 8  # Background + 7 tool classes
+  
+  # Mistake detection model settings
+  mistake_detection:
+    use_temporal: true
+    temporal_window: 10
+    visual_dim: 768
+    tool_dim: 128
+    hidden_dim: 256
+    num_classes: 3  # OK, warning, critical
+    dropout: 0.3
+  
+  # GPT model settings
+  gpt:
+    model_name: "gpt2"
+    num_visual_tokens: 50
+    num_tool_tokens: 20
+    max_sequence_length: 512
+
+# Training settings
+training:
+  max_epochs: 100
+  batch_size: 8
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+  early_stopping_patience: 10
+  
+  # Dataset settings
+  dataset:
+    sequence_length: 16
+    temporal_stride: 2
+    image_size: 224
+    use_augmentation: true
+    train_val_split: 0.8
+  
+  # Learning rate scheduler settings
+  lr_scheduler:
+    use_scheduler: true
+    scheduler_type: "warmup_cosine"  # Options: "step", "multistep", "exponential", "cosine", "plateau", "onecycle", "warmup_cosine", "cyclic_cosine"
+    
+    # Parameters for step decay
+    step_size: 30
+    gamma: 0.1
+    
+    # Parameters for multistep decay
+    milestones: [30, 60, 90]
+    
+    # Parameters for cosine annealing
+    T_max: 100  # Usually same as max_epochs
+    eta_min: 0.000001
+    
+    # Parameters for warm-up
+    warmup_epochs: 5
+    warmup_start_lr: 0.000001
+    
+    # Parameters for one-cycle
+    max_lr: 0.001
+    pct_start: 0.3
+    div_factor: 25.0
+    final_div_factor: 10000.0
+    
+    # Parameters for reduce on plateau
+    factor: 0.1
+    patience: 5
+    threshold: 0.0001
+    cooldown: 0
+    min_lr: 0.000001
+    
+    # Parameters for cyclic cosine
+    T_0: 10
+    T_mult: 2
+
+# Evaluation settings
+evaluation:
+  metrics:
+    - accuracy
+    - precision
+    - recall
+    - f1_score
+    - mAP
+    - confusion_matrix
+  phase_reference_times:
+    preparation: 120
+    calot_triangle_dissection: 480
+    clipping_and_cutting: 240
+    gallbladder_dissection: 780
+    gallbladder_packaging: 180
+    cleaning_and_coagulation: 240
+    gallbladder_extraction: 180
+
+# Voice guidance settings
+voice_guidance:
+  enabled: true
+  tts_engine: "auto"  # Options: "pyttsx3", "gtts", "auto"
+  voice_gender: "female"
+  rate: 150
+  volume: 0.9
+  enable_logging: true
+
+# File paths
+paths:
+  weights_dir: "models/weights"
+  tool_detection_weights: "models/weights/tool_detection.pth"
+  phase_recognition_weights: "models/weights/phase_recognition.pth"
+  mistake_detection_weights: "models/weights/mistake_detection.pth"
+  guidance_weights: "models/weights/guidance.pth"
+  procedure_knowledge: "data/procedure_knowledge.json"
+  logs_dir: "logs"
