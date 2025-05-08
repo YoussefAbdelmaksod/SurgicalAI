@@ -88,4 +88,117 @@ python scripts/prepare_for_training.py
 ### Load Trained Models
 ```bash
 python scripts/load_trained_models.py --source_dir path/to/downloaded/models
-``` 
+```
+
+# SurgicalAI Colab Training: Fixed Setup
+
+## Problem Identified
+
+The error messages in your Colab training indicate path issues:
+
+```
+python3: can't open file '/content/training/train_tool_detection.py': [Errno 2] No such file or directory
+```
+
+This happens because the Colab training script expects training files to be in specific locations, but they aren't being correctly set up.
+
+## Solution
+
+The issue can be fixed by creating a proper directory structure and copying/linking files correctly. Here's how:
+
+### 1. Create the Fix Script
+
+Create a file named `fix_colab_paths.py` with the following content:
+
+```python
+#!/usr/bin/env python3
+import os
+import shutil
+import sys
+
+def create_directory(path):
+    if not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)
+        print(f"Created directory: {path}")
+
+def main():
+    print("Fixing paths for SurgicalAI training in Colab...")
+    
+    # Create required directories
+    create_directory("/content/training")
+    create_directory("/content/models/weights/tool_detection")
+    create_directory("/content/models/weights/vit_lstm")
+    create_directory("/content/models/weights/mistake_detector")
+    
+    # Copy training scripts to the expected locations
+    training_files = [
+        "train_tool_detection.py",
+        "train_phase_recognition.py",
+        "train_all_models.py"
+    ]
+    
+    for file in training_files:
+        source = f"/content/SurgicalAI_clone/training/{file}"
+        target = f"/content/training/{file}"
+        
+        if os.path.exists(source):
+            shutil.copy2(source, target)
+            print(f"Copied {source} to {target}")
+        else:
+            print(f"Warning: Source file {source} not found!")
+    
+    # Create symbolic links for models directory
+    if not os.path.exists("/content/models"):
+        if os.path.exists("/content/SurgicalAI_clone/models"):
+            os.symlink("/content/SurgicalAI_clone/models", "/content/models")
+            print("Created symbolic link for models directory")
+        else:
+            print("Warning: models directory not found in SurgicalAI_clone!")
+    
+    # Create symbolic links for other necessary directories
+    for directory in ["data", "utils", "config"]:
+        if not os.path.exists(f"/content/{directory}"):
+            if os.path.exists(f"/content/SurgicalAI_clone/{directory}"):
+                os.symlink(f"/content/SurgicalAI_clone/{directory}", f"/content/{directory}")
+                print(f"Created symbolic link for {directory} directory")
+            else:
+                print(f"Warning: {directory} directory not found in SurgicalAI_clone!")
+    
+    print("Path fixing completed! You can now run the training scripts.")
+
+if __name__ == "__main__":
+    main()
+```
+
+### 2. Use this Workflow in Colab
+
+1. Mount Google Drive
+2. Clone your repository as `SurgicalAI_clone`
+3. Run the fix script
+4. Change to the root directory 
+5. Run training commands from `/content` directory
+
+### 3. Single Code Block Solution
+
+For convenience, we've provided a single code block in `single_code_block_fix.md` that you can copy into a Colab cell to perform all these steps.
+
+## Updated Workflow
+
+```
+1. Mount Drive -> 2. Clone Repo -> 3. Fix Paths -> 4. Run Training -> 5. Save Models
+```
+
+The updated workflow handles these critical steps:
+- Creates symbolic links to needed directories
+- Copies training scripts to expected locations
+- Ensures model output directories exist
+- Properly saves trained models to Google Drive
+
+## Verification
+
+After running the fix, you can verify success by:
+1. Checking that `/content/training/` contains all three training Python files
+2. Confirming that symbolic links exist for data, models, config and utils
+3. Successfully running training commands from `/content` directory
+
+This solution ensures your SurgicalAI training runs correctly in the Colab environment. 
