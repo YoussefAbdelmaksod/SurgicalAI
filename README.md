@@ -6,6 +6,10 @@ SurgicalAI is a prototype AI system for surgical video analysis providing real-t
 
 **IMPORTANT:** This system is a prototype that has undergone initial training and validation. While functional, it requires further clinical validation before consideration for real-world applications.
 
+## Repository Note
+
+**Large Files:** Due to GitHub file size constraints, large model weights and video files have been excluded from this repository. Please see the README files in the respective directories for instructions on obtaining these files.
+
 ## Features
 
 - **Surgical Phase Recognition**: Identifying surgical phases using Vision Transformer (ViT) with LSTM temporal processing
