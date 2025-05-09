@@ -317,34 +317,194 @@ class SurgicalPerformanceEvaluator:
     
     def _generate_visualizations(self, mistakes, phase_durations, tool_usage, phase_transitions):
         """Generate visualizations for the report."""
+        import matplotlib.pyplot as plt
+        import matplotlib
+        matplotlib.use('Agg')  # Use non-interactive backend
+        import io
+        import base64
+        from collections import defaultdict
+        import numpy as np
+        
         visualizations = {}
         
-        # This would generate actual visualizations in a real implementation
-        # For simplicity, we're just returning placeholder descriptions
+        # Generate mistake timeline visualization
+        fig, ax = plt.subplots(figsize=(10, 6))
+        if mistakes:
+            mistake_times = [m.get('timestamp', 0) for m in mistakes]
+            mistake_risks = [m.get('risk_level', 0) for m in mistakes]
+            mistake_types = [m.get('type', 'Unknown') for m in mistakes]
+            
+            scatter = ax.scatter(mistake_times, mistake_risks, c=np.arange(len(mistakes)), 
+                      cmap='viridis', s=100, alpha=0.7)
+            
+            for i, txt in enumerate(mistake_types):
+                ax.annotate(txt, (mistake_times[i], mistake_risks[i]), 
+                           xytext=(5, 5), textcoords='offset points')
+            
+            # Add phase transition lines if available
+            if phase_transitions:
+                for transition in phase_transitions:
+                    ax.axvline(x=transition.get('timestamp', 0), color='r', linestyle='--', alpha=0.5)
+                    ax.text(transition.get('timestamp', 0), 0.1, 
+                           transition.get('phase', ''), rotation=90, alpha=0.7)
+            
+            ax.set_xlabel('Time (seconds)')
+            ax.set_ylabel('Risk Level')
+            ax.set_title('Timeline of Surgical Mistakes')
+            ax.grid(True, alpha=0.3)
+            
+            # Save to base64
+            buf = io.BytesIO()
+            fig.tight_layout()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            img_str = base64.b64encode(buf.read()).decode('utf-8')
+            plt.close(fig)
+            
+            visualizations['mistake_timeline'] = {
+                'description': 'Timeline of surgical mistakes throughout the procedure',
+                'format': 'png',
+                'data': img_str
+            }
         
-        visualizations['mistake_timeline'] = {
-            'description': 'Timeline of surgical mistakes throughout the procedure',
-            'format': 'png',
-            'data': 'placeholder_for_actual_visualization_data'
-        }
+        # Generate phase duration comparison
+        fig, ax = plt.subplots(figsize=(10, 6))
+        if phase_durations:
+            phases = list(phase_durations.keys())
+            durations = list(phase_durations.values())
+            reference_durations = [self.phase_reference_times.get(phase, 0) for phase in phases]
+            
+            x = np.arange(len(phases))
+            width = 0.35
+            
+            ax.bar(x - width/2, durations, width, label='Actual Duration')
+            ax.bar(x + width/2, reference_durations, width, label='Reference Duration')
+            
+            ax.set_xlabel('Surgical Phase')
+            ax.set_ylabel('Duration (seconds)')
+            ax.set_title('Phase Duration Comparison')
+            ax.set_xticks(x)
+            ax.set_xticklabels([p.replace('_', ' ').title() for p in phases], rotation=45, ha='right')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            
+            # Save to base64
+            buf = io.BytesIO()
+            fig.tight_layout()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            img_str = base64.b64encode(buf.read()).decode('utf-8')
+            plt.close(fig)
+            
+            visualizations['phase_duration'] = {
+                'description': 'Comparison of phase durations with reference times',
+                'format': 'png',
+                'data': img_str
+            }
         
-        visualizations['phase_duration'] = {
-            'description': 'Comparison of phase durations with reference times',
-            'format': 'png',
-            'data': 'placeholder_for_actual_visualization_data'
-        }
+        # Generate tool usage patterns
+        fig, ax = plt.subplots(figsize=(12, 8))
+        if tool_usage:
+            # Flatten tool usage by phase into counts
+            tool_counts = defaultdict(lambda: defaultdict(int))
+            for phase, tools in tool_usage.items():
+                for tool in tools:
+                    tool_counts[phase][tool] += 1
+            
+            phases = list(tool_counts.keys())
+            all_tools = set()
+            for phase_tools in tool_counts.values():
+                all_tools.update(phase_tools.keys())
+            all_tools = sorted(list(all_tools))
+            
+            # Create a matrix for the heatmap
+            data = np.zeros((len(phases), len(all_tools)))
+            for i, phase in enumerate(phases):
+                for j, tool in enumerate(all_tools):
+                    data[i, j] = tool_counts[phase][tool]
+            
+            im = ax.imshow(data, cmap='YlOrRd')
+            
+            # Add colorbar
+            cbar = ax.figure.colorbar(im, ax=ax)
+            cbar.ax.set_ylabel('Usage Count', rotation=-90, va="bottom")
+            
+            # Show all ticks and label them
+            ax.set_xticks(np.arange(len(all_tools)))
+            ax.set_yticks(np.arange(len(phases)))
+            ax.set_xticklabels([t.title() for t in all_tools])
+            ax.set_yticklabels([p.replace('_', ' ').title() for p in phases])
+            
+            # Rotate the tick labels and set their alignment
+            plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+            
+            ax.set_title("Tool Usage Across Surgical Phases")
+            
+            # Loop over data dimensions and create text annotations
+            for i in range(len(phases)):
+                for j in range(len(all_tools)):
+                    text = ax.text(j, i, int(data[i, j]),
+                                  ha="center", va="center", color="black" if data[i, j] < np.max(data)/2 else "white")
+            
+            # Save to base64
+            buf = io.BytesIO()
+            fig.tight_layout()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            img_str = base64.b64encode(buf.read()).decode('utf-8')
+            plt.close(fig)
+            
+            visualizations['tool_usage'] = {
+                'description': 'Tool usage patterns across surgical phases',
+                'format': 'png',
+                'data': img_str
+            }
         
-        visualizations['tool_usage'] = {
-            'description': 'Tool usage patterns across surgical phases',
-            'format': 'png',
-            'data': 'placeholder_for_actual_visualization_data'
-        }
-        
-        visualizations['mistake_heatmap'] = {
-            'description': 'Heatmap of mistake frequency by surgical phase',
-            'format': 'png',
-            'data': 'placeholder_for_actual_visualization_data'
-        }
+        # Generate mistake heatmap by phase
+        fig, ax = plt.subplots(figsize=(10, 6))
+        if mistakes and phase_durations:
+            # Count mistakes by phase
+            mistakes_by_phase = defaultdict(int)
+            for mistake in mistakes:
+                mistakes_by_phase[mistake.get('phase', 'unknown')] += 1
+            
+            phases = list(phase_durations.keys())
+            mistake_counts = [mistakes_by_phase.get(phase, 0) for phase in phases]
+            
+            # Calculate mistake density (mistakes per minute)
+            mistake_density = []
+            for phase in phases:
+                duration = phase_durations.get(phase, 0)
+                count = mistakes_by_phase.get(phase, 0)
+                density = (count / (duration / 60)) if duration > 0 else 0
+                mistake_density.append(density)
+            
+            # Create bar chart
+            ax.bar(phases, mistake_density, color='crimson')
+            ax.set_xlabel('Surgical Phase')
+            ax.set_ylabel('Mistakes per Minute')
+            ax.set_title('Mistake Frequency by Surgical Phase')
+            ax.set_xticklabels([p.replace('_', ' ').title() for p in phases], rotation=45, ha='right')
+            ax.grid(True, alpha=0.3)
+            
+            # Add count labels
+            for i, count in enumerate(mistake_counts):
+                ax.text(i, mistake_density[i] + 0.05, f'{count} mistakes', 
+                       ha='center', va='bottom')
+            
+            # Save to base64
+            buf = io.BytesIO()
+            fig.tight_layout()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            img_str = base64.b64encode(buf.read()).decode('utf-8')
+            plt.close(fig)
+            
+            visualizations['mistake_heatmap'] = {
+                'description': 'Heatmap of mistake frequency by surgical phase',
+                'format': 'png',
+                'data': img_str
+            }
         
         return visualizations
     

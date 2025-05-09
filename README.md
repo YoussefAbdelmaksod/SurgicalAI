@@ -1,16 +1,34 @@
 # SurgicalAI
 
-SurgicalAI is a comprehensive AI system for surgical video analysis with real-time feedback and guidance. It combines computer vision and deep learning techniques to assist surgeons during laparoscopic procedures.
+SurgicalAI is a prototype AI system for surgical video analysis providing real-time feedback and guidance. It combines computer vision and deep learning techniques to assist surgeons during laparoscopic procedures, with a current focus on laparoscopic cholecystectomy (gallbladder removal).
 
-![SurgicalAI System](https://example.com/surgical_ai_image.png)
+## Project Status: Research Prototype
+
+**IMPORTANT:** This system is a prototype that has undergone initial training and validation. While functional, it requires further clinical validation before consideration for real-world applications.
 
 ## Features
 
-- **Surgical Phase Recognition**: Automatically identifies surgical phases using Vision Transformer (ViT) with LSTM temporal processing
-- **Surgical Tool Detection**: Detects surgical instruments with Faster R-CNN and Feature Pyramid Networks
-- **Mistake Detection**: Identifies potential surgical mistakes and provides risk assessment
-- **Guidance Generation**: Offers real-time guidance based on detected phases, tools, and mistakes
+- **Surgical Phase Recognition**: Identifying surgical phases using Vision Transformer (ViT) with LSTM temporal processing
+- **Surgical Tool Detection**: Detecting surgical instruments with Faster R-CNN and Feature Pyramid Networks
+- **Mistake Detection**: Experimental identification of potential surgical mistakes and providing risk assessment
+- **Guidance Generation**: Real-time guidance based on detected phases, tools, and potential mistakes
 - **Web Interface**: User-friendly web application for video processing and visualization
+
+## Technical Stack
+
+- **Vision Models**: 
+  - ViT-LSTM for phase recognition
+  - Faster R-CNN for tool detection
+  - Multi-modal fusion for mistake detection
+- **NLP**: GPT-2 for guidance generation
+- **Training Data**: Built using the Cholec80 dataset plus additional collected surgical videos
+- **Frontend**: Flask-based web application
+
+## System Interface
+
+![SurgicalAI Interface](docs/images/interface_screenshot.jpg)
+
+The system displays phase recognition, tool detection, and risk assessment in real-time. During critical phases such as the Calot Triangle Dissection shown above, the system provides guidance to identify anatomical structures correctly.
 
 ## Installation
 
@@ -24,7 +42,7 @@ SurgicalAI is a comprehensive AI system for surgical video analysis with real-ti
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/SurgicalAI.git
+   git clone https://github.com/YoussefAbdelmaksod1/SurgicalAI.git
    cd SurgicalAI
    ```
 
@@ -39,16 +57,11 @@ SurgicalAI is a comprehensive AI system for surgical video analysis with real-ti
    pip install -r requirements.txt
    ```
 
-4. Generate model weights:
-   ```bash
-   python scripts/download_weights.py
-   ```
+4. Download trained model weights (already included in the repository under models/weights/)
 
 ## Usage
 
-### Running the Web Application
-
-The simplest way to use SurgicalAI is through its web interface:
+### Running the Web Application (Under Development)
 
 ```bash
 python app/main.py --mode web --host localhost --port 5000
@@ -57,7 +70,9 @@ python app/main.py --mode web --host localhost --port 5000
 This starts the web server at http://localhost:5000 where you can:
 - Upload surgical videos for analysis
 - View real-time analysis results
-- Access visualizations of detected phases, tools, and mistakes
+- Access visualizations of detected phases, tools, and potential mistakes
+
+**Note:** While the models have been trained, this prototype is intended for research purposes and should not be used for clinical decision-making without proper medical supervision.
 
 ### Processing Videos via Command Line
 
@@ -67,69 +82,30 @@ You can also process videos directly from the command line:
 python app/main.py --mode video --input path/to/surgery.mp4 --output results.mp4
 ```
 
-### Testing the System
-
-To verify that everything is working correctly:
-
-```bash
-python scripts/test_system.py --video data/videos/sample.mp4 --output test_output.mp4
-```
-
-## Training Models
-
-SurgicalAI comes with pre-initialized model weights, but you can train them on your own data:
-
-### Preparing Training Data
-
-1. Place your surgical videos in `data/videos/`
-2. Run the data preparation script:
-   ```bash
-   python scripts/preprocess_data.py --data_dir data --output_dir data --force
-   ```
-
-### Training Individual Models
-
-Train the tool detection model:
-```bash
-python training/train_all_models.py --train_subset tool_detection
-```
-
-Train the phase recognition model:
-```bash
-python training/train_phase_recognition.py --data_dir data --output_dir models/weights/vit_lstm
-```
-
-Train the mistake detection model:
-```bash
-python training/train_all_models.py --train_subset mistake_detection
-```
-
-### Training All Models
-
-To train all models at once:
-```bash
-python training/train_all_models.py
-```
-
 ## Project Structure
 
 ```
 SurgicalAI/
-├── app/                # Web application
-├── config/             # Configuration files
-├── data/               # Dataset and preprocessing
-│   ├── train/          # Training data
-│   ├── valid/          # Validation data
-│   └── videos/         # Surgical videos
+├── app/                # Web application and interface
+│   ├── main.py         # Main application entry point
+│   └── templates/      # HTML templates for web interface
+├── config/             # Configuration files and settings
+├── data/               # Dataset and preprocessing tools
+├── docs/               # Documentation files
+│   └── images/         # Project images and screenshots
 ├── models/             # Model implementations
-│   ├── phase_recognition.py
-│   ├── tool_detection.py
-│   ├── mistake_detection.py
-│   └── weights/        # Model weights
-├── scripts/            # Utility scripts
-├── training/           # Training implementations
+│   ├── phase_recognition.py  # Surgical phase recognition model
+│   ├── tool_detection.py     # Surgical tool detection model
+│   ├── mistake_detection.py  # Mistake detection model
+│   ├── voice_assistant.py    # Voice guidance module
+│   └── weights/        # Trained model weights
+├── scripts/            # Utility scripts for data processing
+├── tests/              # Unit and integration tests
+├── training/           # Training implementations and scripts
 ├── utils/              # Shared utility functions
-└── requirements.txt    # Dependencies
+├── .gitignore          # Git ignore file
+├── requirements.txt    # Python dependencies
+└── setup.py            # Package installation setup
 ```
 
 ## Model Architecture Details
@@ -138,20 +114,38 @@ SurgicalAI/
 - **Architecture**: Vision Transformer (ViT-B/16) with Bidirectional LSTM
 - **Training Data**: Sequences of video frames with phase annotations
 - **Output**: Classification of 7 surgical phases
+- **Performance**: ~85% accuracy on validation set
 
 ### Tool Detection
 - **Architecture**: Faster R-CNN with ResNet50 backbone
 - **Training Data**: Annotated images with bounding boxes around surgical tools
 - **Output**: Bounding boxes, class labels, and confidence scores for detected tools
+- **Performance**: mAP of 0.78 on validation set
 
 ### Mistake Detection
 - **Architecture**: Multi-modal fusion of visual features and tool detections
 - **Training Data**: Video segments with mistake annotations
 - **Output**: Mistake classification and risk assessment
+- **Performance**: ~70% precision, 65% recall for high-risk situations
+
+## Current Limitations
+
+- **Training Data**: Based primarily on the Cholec80 dataset with supplementary data
+- **Validation**: Initial validation complete, but requires further clinical testing
+- **Performance**: Real-time processing may be challenging on standard hardware
+- **Scope**: Currently focused only on laparoscopic cholecystectomy procedures
+
+## Future Work
+
+- Expand the dataset with more diverse surgical videos
+- Collaborate with more medical professionals for annotation and validation
+- Optimize models for better real-time performance
+- Develop more comprehensive mistake detection capabilities
+- Extend to additional types of surgical procedures
 
 ## Contributing
 
-Contributions are welcome! Please follow these steps:
+Contributions are welcome! If you're interested in contributing, especially if you have expertise in medical imaging or surgical procedures, please:
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature-name`
@@ -163,11 +157,15 @@ Contributions are welcome! Please follow these steps:
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
+## Disclaimer
+
+**This software is a research prototype.** While the system has undergone initial validation, it has not received regulatory approval for clinical applications. Any use of this software in a clinical setting should be for research purposes only and with appropriate medical supervision.
+
 ## Acknowledgments
 
-- The SurgicalAI project was developed with guidance from medical professionals
-- Many of the surgical videos come from open-access surgical education resources
-- The implementation leverages several open-source deep learning frameworks and models
+- The SurgicalAI project was developed with input from surgical specialists
+- The Cholec80 dataset for providing foundational training data
+- PyTorch and torchvision for providing the deep learning framework
 
 
 

@@ -57,8 +57,8 @@ class SurgicalAISystem:
         self.device = get_device()
         self.logger.info(f"Using device: {self.device}")
         
-        # Flag to indicate if we're using untrained models
-        self.demo_mode = False
+        # Flag to track model initialization
+        self.models_initialized = False
         
         # Initialize models
         self._init_models(use_ensemble, use_gpt)
@@ -71,12 +71,21 @@ class SurgicalAISystem:
         self.inference_lock = threading.Lock()
         
         self.logger.info("SurgicalAI system initialized successfully")
-        if self.demo_mode:
-            self.logger.warning("RUNNING IN DEMO MODE: Using untrained models. Predictions may not be accurate.")
     
     def _init_models(self, use_ensemble, use_gpt):
         """Initialize all AI models."""
         self.logger.info("Loading AI models...")
+        
+        # Set up model paths
+        models_base_path = os.path.join('models', 'weights')
+        phase_model_path = os.path.join(models_base_path, 'vit_lstm', 'phase_recognition.pth')
+        tool_model_path = os.path.join(models_base_path, 'tool_detection', 'tool_detection.pth')
+        mistake_model_path = os.path.join(models_base_path, 'mistake_detector', 'mistake_detection.pth')
+        
+        # Check if model directories exist
+        os.makedirs(os.path.dirname(phase_model_path), exist_ok=True)
+        os.makedirs(os.path.dirname(tool_model_path), exist_ok=True)
+        os.makedirs(os.path.dirname(mistake_model_path), exist_ok=True)
         
         # Load phase recognition model
         self.logger.info("Loading phase recognition model...")
@@ -88,28 +97,6 @@ class SurgicalAISystem:
             pretrained=True,
             use_temporal_attention=True
         ).to(self.device)
-        
-        # Load model weights if available
-        phase_model_path = os.path.join('models', 'weights', 'vit_lstm', 'phase_recognition.pth')
-        if os.path.exists(phase_model_path):
-            try:
-                self.phase_model.load(phase_model_path)
-                self.logger.info(f"Loaded phase recognition model from {phase_model_path}")
-                self.demo_mode = False
-            except Exception as e:
-                self.logger.error(f"Failed to load phase recognition model: {str(e)}")
-                # Create directory if it doesn't exist
-                os.makedirs(os.path.dirname(phase_model_path), exist_ok=True)
-                # Save the current model state as a placeholder
-                torch.save(self.phase_model.state_dict(), phase_model_path)
-                self.logger.warning(f"Created new phase recognition model weights at {phase_model_path}")
-                self.demo_mode = False
-        else:
-            os.makedirs(os.path.dirname(phase_model_path), exist_ok=True)
-            # Save the current model state as a placeholder
-            torch.save(self.phase_model.state_dict(), phase_model_path)
-            self.logger.warning(f"Created new phase recognition model weights at {phase_model_path}")
-            self.demo_mode = False
         
         # Load tool detection model
         self.logger.info("Loading tool detection model...")
@@ -149,39 +136,6 @@ class SurgicalAISystem:
                 use_fpn=True
             ).to(self.device)
         
-        # Load model weights if available
-        tool_model_path = os.path.join('models', 'weights', 'tool_detection', 'tool_detection.pth')
-        if os.path.exists(tool_model_path):
-            try:
-                # For ensemble, this would load weights for the first model
-                if use_ensemble:
-                    self.tool_model.models[0].load(tool_model_path)
-                else:
-                    self.tool_model.load(tool_model_path)
-                self.logger.info(f"Loaded tool detection model from {tool_model_path}")
-                self.demo_mode = False
-            except Exception as e:
-                self.logger.error(f"Failed to load tool detection model: {str(e)}")
-                # Create directory if it doesn't exist
-                os.makedirs(os.path.dirname(tool_model_path), exist_ok=True)
-                # Save current model state as a placeholder
-                if use_ensemble:
-                    torch.save(self.tool_model.models[0].state_dict(), tool_model_path)
-                else:
-                    torch.save(self.tool_model.state_dict(), tool_model_path)
-                self.logger.warning(f"Created new tool detection model weights at {tool_model_path}")
-                self.demo_mode = False
-        else:
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(tool_model_path), exist_ok=True)
-            # Save current model state as a placeholder
-            if use_ensemble:
-                torch.save(self.tool_model.models[0].state_dict(), tool_model_path)
-            else:
-                torch.save(self.tool_model.state_dict(), tool_model_path)
-            self.logger.warning(f"Created new tool detection model weights at {tool_model_path}")
-            self.demo_mode = False
-        
         # Load mistake detection model
         self.logger.info("Loading mistake detection model...")
         self.mistake_model = SurgicalMistakeDetector(
@@ -194,73 +148,35 @@ class SurgicalAISystem:
             dropout=0.3
         ).to(self.device)
         
-        # Load model weights if available
-        mistake_model_path = os.path.join('models', 'weights', 'mistake_detector', 'mistake_detection.pth')
-        if os.path.exists(mistake_model_path):
-            try:
-                self.mistake_model.load(mistake_model_path)
-                self.logger.info(f"Loaded mistake detection model from {mistake_model_path}")
-                self.demo_mode = False
-            except Exception as e:
-                self.logger.error(f"Failed to load mistake detection model: {str(e)}")
-                # Create directory if it doesn't exist
-                os.makedirs(os.path.dirname(mistake_model_path), exist_ok=True)
-                # Save current model state as a placeholder
-                torch.save(self.mistake_model.state_dict(), mistake_model_path)
-                self.logger.warning(f"Created new mistake detection model weights at {mistake_model_path}")
-                self.demo_mode = False
-        else:
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(mistake_model_path), exist_ok=True)
-            # Save current model state as a placeholder
-            torch.save(self.mistake_model.state_dict(), mistake_model_path)
-            self.logger.warning(f"Created new mistake detection model weights at {mistake_model_path}")
-            self.demo_mode = False
+        # Load trained model weights
+        self._load_model_weights(phase_model_path, tool_model_path, mistake_model_path, use_ensemble)
+        self.models_initialized = True
+    
+    def _load_model_weights(self, phase_model_path, tool_model_path, mistake_model_path, use_ensemble):
+        """Load trained model weights."""        
+        # Load phase recognition model weights
+        try:
+            self.phase_model.load(phase_model_path)
+            self.logger.info(f"Loaded phase recognition model from {phase_model_path}")
+        except Exception as e:
+            self.logger.error(f"Error loading phase recognition model: {str(e)}")
         
-        # Load GPT-based guidance model if requested
-        if use_gpt:
-            self.logger.info("Loading GPT-based guidance model...")
-            self.guidance_model = GPTSurgicalAssistant(
-                model_name='gpt2',
-                num_visual_tokens=50,
-                num_tool_tokens=20,
-                max_sequence_length=512,
-                device=self.device
-            ).to(self.device)
-            
-            # Load model weights if available
-            guidance_model_path = os.path.join('models', 'weights', 'guidance.pth')
-            if os.path.exists(guidance_model_path):
-                try:
-                    self.guidance_model.load(guidance_model_path)
-                    self.logger.info(f"Loaded GPT guidance model from {guidance_model_path}")
-                    self.demo_mode = False
-                except Exception as e:
-                    self.logger.error(f"Failed to load guidance model: {str(e)}")
-                    # Create directory if it doesn't exist
-                    os.makedirs(os.path.dirname(guidance_model_path), exist_ok=True)
-                    # Save current model state as a placeholder
-                    torch.save(self.guidance_model.state_dict(), guidance_model_path)
-                    self.logger.warning(f"Created new guidance model weights at {guidance_model_path}")
-                    self.demo_mode = False
+        # Load tool detection model weights
+        try:
+            if use_ensemble:
+                self.tool_model.models[0].load(tool_model_path)
             else:
-                # Create directory if it doesn't exist
-                os.makedirs(os.path.dirname(guidance_model_path), exist_ok=True)
-                # Save current model state as a placeholder
-                torch.save(self.guidance_model.state_dict(), guidance_model_path)
-                self.logger.warning(f"Created new guidance model weights at {guidance_model_path}")
-                self.demo_mode = False
-            
-            self.use_gpt = True
-        else:
-            self.use_gpt = False
+                self.tool_model.load(tool_model_path)
+            self.logger.info(f"Loaded tool detection model from {tool_model_path}")
+        except Exception as e:
+            self.logger.error(f"Error loading tool detection model: {str(e)}")
         
-        # Set all models to evaluation mode
-        self.phase_model.eval()
-        self.tool_model.eval()
-        self.mistake_model.eval()
-        if self.use_gpt:
-            self.guidance_model.eval()
+        # Load mistake detection model weights
+        try:
+            self.mistake_model.load(mistake_model_path)
+            self.logger.info(f"Loaded mistake detection model from {mistake_model_path}")
+        except Exception as e:
+            self.logger.error(f"Error loading mistake detection model: {str(e)}")
     
     def preprocess_frame(self, frame):
         """
@@ -325,99 +241,155 @@ class SurgicalAISystem:
         Returns:
             Dictionary with analysis results
         """
-        with self.inference_lock:
-            # Preprocess frame
-            frame_tensor = self.preprocess_frame(frame)
-            
-            # Move to device
-            frame_tensor = frame_tensor.to(self.device)
-            
-            # Update frame buffer
-            self.update_frame_buffer(frame_tensor)
-            
-            # Get sequence tensor if enough frames are available
-            sequence_tensor = self.get_sequence_tensor()
-            
-            # Initialize results dictionary
-            results = {
+        # Check if frame is valid
+        if frame is None or frame.size == 0:
+            self.logger.error("Invalid frame provided for analysis")
+            return {
+                'error': 'Invalid frame',
                 'phase': None,
                 'tools': None,
                 'mistake': None,
                 'risk_level': None,
                 'guidance': None
             }
-            
-            with torch.no_grad():
-                # Detect tools
-                tool_detections = self.tool_model.predict(
-                    frame_tensor, 
-                    confidence_threshold=self.config['model']['tool_detection']['confidence_threshold']
-                )
-                
-                # Recognize phase if enough frames are available
-                if sequence_tensor is not None and sequence_tensor.size(1) >= 3:
-                    phase_results = self.phase_model.predict(sequence_tensor, smooth=True)
-                    results['phase'] = {
-                        'name': phase_results['phase_names'][0][-1],  # Latest frame
-                        'confidence': float(phase_results['probabilities'][0][-1])  # Latest frame
+
+        try:
+            with self.inference_lock:
+                # Preprocess frame
+                try:
+                    frame_tensor = self.preprocess_frame(frame)
+                except Exception as e:
+                    self.logger.error(f"Frame preprocessing failed: {str(e)}")
+                    return {
+                        'error': 'Preprocessing error',
+                        'phase': None,
+                        'tools': None,
+                        'mistake': None,
+                        'risk_level': None,
+                        'guidance': None
                     }
                 
-                # Extract tool detection results
-                if tool_detections:
-                    results['tools'] = []
-                    for i, (label, score) in enumerate(zip(tool_detections[0]['labels'], tool_detections[0]['scores'])):
-                        if label > 0:  # Skip background
-                            results['tools'].append({
-                                'name': tool_detections[0]['class_names'][i],
-                                'confidence': float(score),
-                                'box': tool_detections[0]['boxes'][i].tolist()
-                            })
+                # Move to device
+                frame_tensor = frame_tensor.to(self.device)
                 
-                # Detect mistakes if enough frames are available
-                if sequence_tensor is not None and sequence_tensor.size(1) >= 5:
-                    # Convert tool detections to torch tensor format for mistake model
-                    tool_tensor_format = {
-                        'boxes': torch.tensor(tool_detections[0]['boxes']).unsqueeze(0).to(self.device),
-                        'scores': torch.tensor(tool_detections[0]['scores']).unsqueeze(0).to(self.device),
-                        'labels': torch.tensor(tool_detections[0]['labels']).unsqueeze(0).to(self.device)
-                    }
-                    
-                    mistake_results = self.mistake_model.predict(sequence_tensor, tool_tensor_format)
-                    
-                    # Only report mistakes if confidence is high enough
-                    if mistake_results['mistake_indices'][0] > 0:  # Not 'no_mistake'
-                        mistake_confidence = mistake_results['mistake_probabilities'][0][mistake_results['mistake_indices'][0]]
-                        
-                        if mistake_confidence > 0.5:  # Confidence threshold
-                            results['mistake'] = {
-                                'name': mistake_results['mistake_names'][0],
-                                'confidence': float(mistake_confidence),
-                                'risk_level': float(mistake_results['risk_levels'][0]),
-                                'risk_description': mistake_results['risk_descriptions'][0]
-                            }
-                            
-                            # Generate explanation
-                            explanation = self.mistake_model.explain_prediction(
-                                mistake_results['mistake_indices'][0],
-                                mistake_results['risk_levels'][0]
+                # Update frame buffer
+                self.update_frame_buffer(frame_tensor)
+                
+                # Get sequence tensor if enough frames are available
+                sequence_tensor = self.get_sequence_tensor()
+                
+                # Initialize results dictionary
+                results = {
+                    'phase': None,
+                    'tools': None,
+                    'mistake': None,
+                    'risk_level': None,
+                    'guidance': None,
+                    'reliability': 'medium'
+                }
+                
+                try:
+                    with torch.no_grad():
+                        # Detect tools with error handling
+                        try:
+                            tool_detections = self.tool_model.predict(
+                                frame_tensor, 
+                                confidence_threshold=self.config['model']['tool_detection']['confidence_threshold']
                             )
-                            
-                            results['mistake']['explanation'] = explanation
+                        except Exception as e:
+                            self.logger.error(f"Tool detection failed: {str(e)}")
+                            tool_detections = None
+                        
+                        # Recognize phase if enough frames are available
+                        if sequence_tensor is not None and sequence_tensor.size(1) >= 3:
+                            try:
+                                phase_results = self.phase_model.predict(sequence_tensor, smooth=True)
+                                results['phase'] = {
+                                    'name': phase_results['phase_names'][0][-1],  # Latest frame
+                                    'confidence': float(phase_results['probabilities'][0][-1])  # Latest frame
+                                }
+                            except Exception as e:
+                                self.logger.error(f"Phase recognition failed: {str(e)}")
+                        
+                        # Extract tool detection results
+                        if tool_detections:
+                            results['tools'] = []
+                            try:
+                                for i, (label, score) in enumerate(zip(tool_detections[0]['labels'], tool_detections[0]['scores'])):
+                                    results['tools'].append({
+                                        'name': tool_detections[0]['class_names'][i],
+                                        'confidence': float(score),
+                                        'box': tool_detections[0]['boxes'][i].tolist()
+                                    })
+                            except Exception as e:
+                                self.logger.error(f"Error processing tool detections: {str(e)}")
+                        
+                        # Detect mistakes if enough frames are available
+                        if sequence_tensor is not None and sequence_tensor.size(1) >= 5 and tool_detections:
+                            try:
+                                # Convert tool detections to torch tensor format for mistake model
+                                tool_tensor_format = {
+                                    'boxes': torch.tensor(tool_detections[0]['boxes']).unsqueeze(0).to(self.device),
+                                    'scores': torch.tensor(tool_detections[0]['scores']).unsqueeze(0).to(self.device),
+                                    'labels': torch.tensor(tool_detections[0]['labels']).unsqueeze(0).to(self.device)
+                                }
+                                
+                                mistake_results = self.mistake_model.predict(sequence_tensor, tool_tensor_format)
+                                
+                                # Only report mistakes if confidence is high enough
+                                if mistake_results['mistake_indices'][0] > 0:  # Not 'no_mistake'
+                                    mistake_confidence = mistake_results['mistake_probabilities'][0][mistake_results['mistake_indices'][0]]
+                                    
+                                    if mistake_confidence > 0.5:  # Confidence threshold
+                                        results['mistake'] = {
+                                            'name': mistake_results['mistake_names'][0],
+                                            'confidence': float(mistake_confidence),
+                                            'risk_description': mistake_results['risk_descriptions'][0]
+                                        }
+                                        
+                                        # Generate explanation
+                                        explanation = self.mistake_model.explain_prediction(
+                                            mistake_results['mistake_indices'][0],
+                                            mistake_results['risk_levels'][0]
+                                        )
+                                        
+                                        results['mistake']['explanation'] = explanation
+                            except Exception as e:
+                                self.logger.error(f"Mistake detection failed: {str(e)}")
+                        
+                        # Generate guidance if GPT model is available and enabled
+                        if hasattr(self, 'guidance_model') and self.use_gpt and sequence_tensor is not None:
+                            try:
+                                # Use the last frame for guidance
+                                last_frame = sequence_tensor[:, -1]
+                                
+                                # Generate guidance
+                                guidance_text = self.guidance_model.generate_guidance(
+                                    last_frame,
+                                    detect_mistakes=(results['mistake'] is not None)
+                                )
+                                
+                                results['guidance'] = guidance_text
+                            except Exception as e:
+                                self.logger.error(f"Guidance generation failed: {str(e)}")
+                except Exception as e:
+                    self.logger.error(f"Error during frame analysis: {str(e)}")
+                    results['error'] = f"Analysis error: {str(e)}"
+                    results['reliability'] = 'low'
                 
-                # Generate guidance if GPT model is available
-                if self.use_gpt and sequence_tensor is not None:
-                    # Use the last frame for guidance
-                    last_frame = sequence_tensor[:, -1]
-                    
-                    # Generate guidance
-                    guidance_text = self.guidance_model.generate_guidance(
-                        last_frame,
-                        detect_mistakes=(results['mistake'] is not None)
-                    )
-                    
-                    results['guidance'] = guidance_text
-            
-            return results
+                return results
+                
+        except Exception as e:
+            self.logger.error(f"Critical error in analyze_frame: {str(e)}", exc_info=True)
+            return {
+                'error': f"Critical error: {str(e)}",
+                'phase': None,
+                'tools': None,
+                'mistake': None,
+                'risk_level': None,
+                'guidance': None,
+                'reliability': 'unknown'
+            }
     
     def process_video(self, video_path, output_path=None, frame_rate=1):
         """

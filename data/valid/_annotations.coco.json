@@ -1,3 +1,29 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:7da7681b1992a18662679aca45d3522e32ec2a224e2b3c5d3916809f3869d085
-size 1115
+{
+  "info": {
+    "description": "SurgicalAI Dataset",
+    "url": "",
+    "version": "1.0",
+    "year": 2025,
+    "contributor": "SurgicalAI",
+    "date_created": "2025/05/08"
+  },
+  "licenses": [
+    {
+      "url": "https://creativecommons.org/licenses/by/4.0/",
+      "id": 1,
+      "name": "CC BY 4.0"
+    }
+  ],
+  "images": [
+    {
+      "id": 1,
+      "license": 1,
+      "file_name": "video03_000730_png.rf.279f20f5ab11a1a08b9541586dc71140.jpg",
+      "height": 224,
+      "width": 224,
+      "date_captured": "2025-05-08 23:45:01"
+    }
+  ],
+  "annotations": [],
+  "categories": []
+}
