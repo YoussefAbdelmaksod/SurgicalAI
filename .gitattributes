@@ -1,3 +1,4 @@
-models/weights/**/*.pth filter=lfs diff=lfs merge=lfs -text
-data/videos/*.mp4 filter=lfs diff=lfs merge=lfs -text
-data/videos/*.ts filter=lfs diff=lfs merge=lfs -text
+# Treat large files as binary
+models/weights/**/*.pth binary
+data/videos/*.mp4 binary
+data/videos/*.ts binary
