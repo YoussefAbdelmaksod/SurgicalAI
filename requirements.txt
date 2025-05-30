@@ -1,63 +1,25 @@
-# Core dependencies
-torch==2.0.1
-torchvision==0.15.2
-numpy==1.24.3
-Pillow==10.0.0
-matplotlib==3.7.2
-seaborn==0.12.2
-tqdm==4.65.0
-opencv-python==4.8.0.74
-PyYAML==6.0.1
+# Core dependencies for SurgicalAI training
+numpy>=1.20.0
+scipy>=1.7.0
+matplotlib>=3.4.0
+scikit-learn>=0.24.0
+PyYAML>=6.0
+tqdm>=4.62.0
 
-# Data handling
-pycocotools==2.0.6
-albumentations==1.3.1
-pandas==2.0.3
+# PyTorch ecosystem
+torch>=1.10.0
+torchvision>=0.11.0
+timm>=0.6.12
 
-# Hyperparameter optimization
-optuna==3.2.0
-scikit-learn==1.3.0
+# Computer vision
+opencv-python-headless>=4.5.0
+albumentations>=1.1.0
+Pillow>=9.0.0
 
-# Visualization and logging
-tensorboard==2.13.0
-plotly==5.15.0
+# Data processing
+pycocotools>=2.0.4
 
-# Utilities
-psutil==5.9.5
-rich==13.4.2
-
-# Optional: for parallel processing
-joblib==1.3.1
-
-# Optional: for GPU monitoring
-gputil==1.4.0
-
-# Optional: for storing models/results
-h5py==3.9.0
-
-# Additional dependencies
-timm>=0.5.4
-transformers>=4.8.2
-scikit-learn>=0.24.2
-flask>=2.0.1
-pyyaml>=5.4.1
-tqdm>=4.61.2
-pillow>=8.3.1
-jinja2>=3.0.1
+# Training utilities
+tensorboard>=2.7.0
 einops>=0.4.1
-tensorboard>=2.9.0
-torchmetrics>=0.8.0
-pytorchvideo>=0.1.5
-kornia>=0.6.0
-torchtext>=0.10.0
-pyttsx3>=2.90
-pygame>=2.1.0
-gtts>=2.2.4
-# For Windows TTS
-pywin32>=303; platform_system=="Windows"
-# Visualization
-plotly>=5.5.0
-# Data handling
-pyarrow>=6.0.1
-# For learning rate scheduling
-torch-lr-finder>=0.2.1 
+torchmetrics>=0.8.0 

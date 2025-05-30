@@ -2,5 +2,9 @@
 Data handling utilities for SurgicalAI.
 """
 
-from data.coco_dataset import COCOSurgicalToolDataset
-from data.dataloader import load_video
+# Import dataset classes from training.surgical_datasets for easier access
+from training.surgical_datasets import (
+    PhaseRecognitionDataset,
+    ToolDetectionDataset,
+    MistakeDetectionDataset
+)

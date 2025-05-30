@@ -12,6 +12,7 @@ import os
 import threading
 import queue
 import time
+import random
 from typing import List, Dict, Optional, Union, Any
 
 logger = logging.getLogger(__name__)
@@ -132,40 +133,41 @@ class TTSEngine:
             self.thread.start()
             
     def _process_queue(self):
-        """Process speech queue in background thread."""
-        try:
-            while self.is_running:
-                try:
-                    # Get next message from queue with timeout
-                    text = self.message_queue.get(timeout=0.5)
-                    self._speak_now(text)
-                    self.message_queue.task_done()
-                except queue.Empty:
-                    # Queue is empty, check if we should exit
-                    if self.message_queue.empty():
-                        # Exit if queue remains empty
-                        self.is_running = False
-                except Exception as e:
-                    logger.error(f"Error in TTS processing: {str(e)}")
-        finally:
-            self.is_running = False
-            
+        """Process message queue in background thread."""
+        while self.is_running:
+            try:
+                # Get message from queue with timeout to allow thread to exit
+                text = self.message_queue.get(timeout=0.5)
+                
+                # Speak the message
+                self._speak_now(text)
+                
+                # Mark task as done
+                self.message_queue.task_done()
+            except queue.Empty:
+                # No messages in queue, continue waiting
+                pass
+            except Exception as e:
+                logger.error(f"Error in TTS processing thread: {str(e)}")
+        
+        logger.debug("TTS processing thread exiting.")
+        
     def stop(self):
-        """Stop all speech and clear queue."""
-        if self.engine is not None:
-            self.engine.stop()
-            
-        # Clear the message queue
+        """Stop TTS processing."""
+        self.is_running = False
+        
+        # Clear the queue
         with self.message_queue.mutex:
             self.message_queue.queue.clear()
             
-        self.is_running = False
-        
     def cleanup(self):
         """Clean up resources."""
         self.stop()
-        if self.thread and self.thread.is_alive():
+        
+        if self.thread is not None and self.thread.is_alive():
             self.thread.join(timeout=1.0)
+            
+        self.engine = None
 
 
 class STTEngine:
@@ -213,59 +215,47 @@ class STTEngine:
             return None
             
         try:
+            # Initialize microphone
             with sr.Microphone() as source:
                 logger.info("Listening for command...")
                 
                 # Adjust for ambient noise
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                self.recognizer.adjust_for_ambient_noise(source)
                 
-                # Listen for audio
+                # Listen for command
                 audio = self.recognizer.listen(
                     source, 
-                    timeout=self.timeout, 
+                    timeout=self.timeout,
                     phrase_time_limit=self.phrase_time_limit
                 )
                 
-                logger.info("Audio captured, recognizing...")
-                
-                # Recognize speech using Google Speech Recognition
-                text = self.recognizer.recognize_google(audio, language=self.language)
-                
-                logger.info(f"Recognized: {text}")
-                
-                # If commands list provided, find best match
+                # Recognize command
                 if commands_list:
-                    text = self._find_best_command_match(text, commands_list)
-                    
-                return text
+                    # If we have a list of expected commands, use a more restrictive model
+                    command = self.recognizer.recognize_sphinx(
+                        audio,
+                        language=self.language,
+                        keyword_entries=[(cmd, 0.5) for cmd in commands_list]
+                    )
+                else:
+                    # Otherwise use Google's more accurate but internet-dependent model
+                    command = self.recognizer.recognize_google(
+                        audio,
+                        language=self.language
+                    )
                 
+                logger.info(f"Recognized command: {command}")
+                return command
         except sr.WaitTimeoutError:
-            logger.info("No speech detected within timeout period.")
+            logger.warning("Command recognition timed out.")
         except sr.UnknownValueError:
-            logger.info("Speech recognition could not understand audio.")
+            logger.warning("Command not recognized.")
         except sr.RequestError as e:
-            logger.error(f"Could not request results; {str(e)}")
+            logger.error(f"Recognition service error: {str(e)}")
         except Exception as e:
-            logger.error(f"Error in speech recognition: {str(e)}")
+            logger.error(f"Error in command recognition: {str(e)}")
             
         return None
-        
-    def _find_best_command_match(self, text, commands_list):
-        """Find best matching command from recognized text."""
-        text = text.lower()
-        
-        # First check for exact matches
-        for command in commands_list:
-            if command.lower() == text:
-                return command
-                
-        # Then check for commands contained in the text
-        for command in commands_list:
-            if command.lower() in text:
-                return command
-                
-        # If no match, return original text
-        return text
 
 
 class VoiceAssistant:
@@ -277,7 +267,8 @@ class VoiceAssistant:
     """
     
     def __init__(self, voice_id=None, feedback_level="full", 
-                 critical_warnings_only=False, enable_voice_commands=False):
+                 critical_warnings_only=False, enable_voice_commands=False,
+                 user_profile=None):
         """
         Initialize voice assistant.
         
@@ -286,10 +277,12 @@ class VoiceAssistant:
             feedback_level: Level of feedback detail ("minimal", "standard", "full")
             critical_warnings_only: Whether to only provide critical warnings
             enable_voice_commands: Whether to enable voice command recognition
+            user_profile: Optional user profile for personalized guidance
         """
         self.feedback_level = feedback_level
         self.critical_warnings_only = critical_warnings_only
         self.enable_voice_commands = enable_voice_commands
+        self.user_profile = user_profile
         
         # Initialize TTS engine
         self.tts_engine = TTSEngine(voice_id=voice_id)
@@ -318,7 +311,18 @@ class VoiceAssistant:
             "feedback": 20      # 20 seconds cooldown
         }
         
-        # Voice commands dictionary
+        # Message history
+        self.message_history = []
+        self.max_history = 100
+        
+        # Current surgical context
+        self.current_context = {
+            "phase": None,
+            "detected_tools": [],
+            "active_warnings": []
+        }
+        
+        # Voice command handlers
         self.voice_commands = {
             "repeat": self._handle_repeat_command,
             "stop": self._handle_stop_command,
@@ -326,29 +330,49 @@ class VoiceAssistant:
             "status": self._handle_status_command
         }
         
-        # Store last few messages for repeat functionality
-        self.message_history = []
-        self.max_history = 5
+        # Response templates
+        self.responses = {
+            "help_text": "Available commands: repeat, stop, help, status. You can ask for guidance or information about the current phase.",
+            "no_context": "I don't have enough context to provide guidance.",
+            "welcome": "Surgical AI assistant is ready. Voice guidance is active."
+        }
         
-        # Standard responses dictionary
-        self.responses = self._load_responses()
-        
-    def _load_responses(self):
-        """Load standard responses from configuration."""
-        # In a real implementation, this would load from a config file
-        return {
-            "greeting": "Surgical AI assistant initialized and ready.",
-            "help_text": "Available commands: repeat, stop, help, and status.",
-            "acknowledgment": "Understood.",
-            "error": "I'm sorry, I couldn't process that request.",
-            "warnings": {
-                "artery_nearby": "Careful! Artery nearby.",
-                "incorrect_clipping": "Incorrect clipping attempt.",
-                "wrong_tool": "Wrong tool for this phase.",
-                "excessive_force": "Excessive force detected.",
-                "anatomical_anomaly": "Anatomical anomaly detected."
+        # Personalized guidance phrases based on experience level
+        self.experience_level_phrases = {
+            "novice": {
+                "instruction_prefix": ["Remember to ", "Make sure to ", "It's important to ", "Don't forget to "],
+                "warning_prefix": ["Be careful with ", "Watch out for ", "Pay close attention to ", "Be cautious of "],
+                "instruction_detail": "detailed",
+                "pace": "slower"
+            },
+            "junior": {
+                "instruction_prefix": ["Remember to ", "You should ", "Please ", "Make sure you "],
+                "warning_prefix": ["Be careful with ", "Watch out for ", "Pay attention to "],
+                "instruction_detail": "standard",
+                "pace": "standard"
+            },
+            "intermediate": {
+                "instruction_prefix": ["Please ", "Now ", ""],
+                "warning_prefix": ["Watch for ", "Be aware of ", "Note the "],
+                "instruction_detail": "standard",
+                "pace": "standard"
+            },
+            "senior": {
+                "instruction_prefix": ["", "Consider ", "You may want to "],
+                "warning_prefix": ["Note ", "Be aware of ", "Watch for "],
+                "instruction_detail": "concise",
+                "pace": "faster"
+            },
+            "expert": {
+                "instruction_prefix": ["", "Consider "],
+                "warning_prefix": ["Note ", "Be aware of "],
+                "instruction_detail": "minimal",
+                "pace": "faster"
             }
         }
+        
+        # Welcome message
+        self.speak(self.responses["welcome"], priority_level="information")
     
     def speak(self, message, priority_level="information", context=None, blocking=False):
         """
@@ -390,6 +414,62 @@ class VoiceAssistant:
         # Speak the message
         self.tts_engine.speak(message, blocking=blocking, priority=is_priority)
         
+    def update_context(self, context_data):
+        """
+        Update the current surgical context.
+        
+        Args:
+            context_data: Dictionary with context data
+        """
+        # Update context
+        for key, value in context_data.items():
+            self.current_context[key] = value
+        
+    def provide_personalized_guidance(self, message, priority_level="instruction", context=None):
+        """
+        Provide guidance personalized to the surgeon's experience level.
+        
+        Args:
+            message: Base message text
+            priority_level: Priority level
+            context: Additional context information
+        """
+        if not self.user_profile:
+            # No user profile, provide standard guidance
+            self.speak(message, priority_level=priority_level, context=context)
+            return
+            
+        # Get experience level
+        experience_level = self.user_profile.experience_level
+        if experience_level not in self.experience_level_phrases:
+            experience_level = "intermediate"  # Default if invalid
+            
+        # Get personalization phrases
+        phrases = self.experience_level_phrases[experience_level]
+        
+        # Personalize message based on priority level and experience
+        if priority_level == "instruction":
+            prefix = random.choice(phrases["instruction_prefix"])
+            personalized_message = f"{prefix}{message[0].lower()}{message[1:]}" if message else ""
+        elif priority_level == "warning":
+            prefix = random.choice(phrases["warning_prefix"])
+            personalized_message = f"{prefix}{message[0].lower()}{message[1:]}" if message else ""
+        else:
+            personalized_message = message
+            
+        # Adjust TTS engine rate based on experience level
+        original_rate = self.tts_engine.rate
+        if phrases["pace"] == "slower":
+            self.tts_engine.rate = max(120, original_rate - 30)
+        elif phrases["pace"] == "faster":
+            self.tts_engine.rate = min(220, original_rate + 20)
+            
+        # Speak personalized message
+        self.speak(personalized_message, priority_level=priority_level, context=context)
+        
+        # Restore original rate
+        self.tts_engine.rate = original_rate
+        
     def provide_phase_guidance(self, phase_name, is_transition=False):
         """
         Provide guidance for the current surgical phase.
@@ -399,81 +479,155 @@ class VoiceAssistant:
             is_transition: Whether this is a transition to a new phase
         """
         if is_transition:
-            self.speak(f"Entering {phase_name} phase.", priority_level="instruction")
-            
-            # Provide additional guidance based on the phase
-            if phase_name == "Preparation":
-                self.speak("Please ensure all tools are properly sterilized and ready.", 
-                           priority_level="instruction")
-            elif phase_name == "Calot's Triangle Dissection":
-                self.speak("Critical phase. Identify cystic duct and artery.", 
-                           priority_level="instruction")
-            elif phase_name == "Clipping and Cutting":
-                self.speak("Ensure correct placement of clips before cutting.", 
-                           priority_level="warning")
-            elif phase_name == "Gallbladder Dissection":
-                self.speak("Maintain gentle upward traction during dissection.", 
-                           priority_level="instruction")
-            elif phase_name == "Gallbladder Extraction":
-                self.speak("Verify complete removal and inspect for bleeding.", 
-                           priority_level="instruction")
-            elif phase_name == "Cleaning and Coagulation":
-                self.speak("Check for bile leakage and ensure hemostasis.", 
-                           priority_level="instruction")
-            elif phase_name == "Closing":
-                self.speak("Verify no instruments or sponges remain in the cavity.", 
-                           priority_level="warning")
+            # Get personalized phase guidance if user profile is available
+            if self.user_profile:
+                # Get personalized guidance
+                context = {"is_transition": True}
+                phase_guidance = self.user_profile.get_personalized_guidance(phase_name, context)
+                
+                # Basic announcement
+                self.provide_personalized_guidance(
+                    f"Entering {phase_name} phase.", 
+                    priority_level="instruction"
+                )
+                
+                # Add personalized warnings if available
+                if "phase_warnings" in phase_guidance and phase_guidance["phase_warnings"]:
+                    # Pick most relevant warning
+                    warning = phase_guidance["phase_warnings"][0]
+                    self.provide_personalized_guidance(
+                        f"Pay attention to {warning}",
+                        priority_level="warning"
+                    )
+                
+                # Add tool recommendations if available and enabled
+                if "recommended_tools" in phase_guidance and self.user_profile.preferences["show_tool_recommendations"]:
+                    tools = phase_guidance["recommended_tools"][:2]  # Top 2 tools
+                    if tools:
+                        tools_str = " and ".join(tools)
+                        self.provide_personalized_guidance(
+                            f"Recommended tools: {tools_str}",
+                            priority_level="information"
+                        )
+            else:
+                # Standard non-personalized guidance
+                self.speak(f"Entering {phase_name} phase.", priority_level="instruction")
+                
+                # Provide additional guidance based on the phase
+                if phase_name == "Preparation":
+                    self.speak("Please ensure all tools are properly sterilized and ready.", 
+                               priority_level="instruction")
+                elif phase_name == "Calot's Triangle Dissection":
+                    self.speak("Critical phase. Identify cystic duct and artery.", 
+                               priority_level="instruction")
+                elif phase_name == "Clipping and Cutting":
+                    self.speak("Ensure correct placement of clips before cutting.", 
+                               priority_level="warning")
+                elif phase_name == "Gallbladder Dissection":
+                    self.speak("Maintain gentle upward traction during dissection.", 
+                               priority_level="instruction")
+                elif phase_name == "Gallbladder Extraction":
+                    self.speak("Verify complete removal and inspect for bleeding.", 
+                               priority_level="instruction")
+                elif phase_name == "Cleaning and Coagulation":
+                    self.speak("Check for bile leakage and ensure hemostasis.", 
+                               priority_level="instruction")
+                elif phase_name == "Closing":
+                    self.speak("Verify no instruments or sponges remain in the cavity.", 
+                               priority_level="warning")
     
-    def warn_wrong_tool(self, current_tool, required_tool, phase_name):
+    def warn_about_mistake(self, mistake_info):
         """
-        Warn about wrong tool usage.
+        Provide voice warning about a detected mistake.
         
         Args:
-            current_tool: Currently detected tool
-            required_tool: Required tool for current phase/action
-            phase_name: Current surgical phase
+            mistake_info: Dictionary with mistake information
         """
-        message = f"Wrong tool. {current_tool} detected, but {required_tool} is needed for {phase_name}."
-        self.speak(message, priority_level="warning")
-    
-    def warn_risk_situation(self, risk_type, risk_level, details=None):
-        """
-        Warn about risky situation.
+        mistake_type = mistake_info.get("type", "unknown")
+        description = mistake_info.get("description", "")
+        risk_level = mistake_info.get("risk_level", 0.0)
         
-        Args:
-            risk_type: Type of risk ("anatomical", "technique", "tool")
-            risk_level: Risk level (1-5)
-            details: Specific details about the risk
-        """
-        if risk_level >= 4:  # High risk
-            priority = "critical"
-        elif risk_level >= 2:  # Medium risk
-            priority = "warning"
-        else:  # Low risk
-            priority = "information"
-            
-        if risk_type == "anatomical":
-            message = f"Caution! {details if details else 'Important anatomical structure'} nearby."
-        elif risk_type == "technique":
-            message = f"Technique risk: {details if details else 'Adjust approach'}."
-        elif risk_type == "tool":
-            message = f"Tool risk: {details if details else 'Check tool position'}."
+        # Determine priority level based on risk level
+        if risk_level >= 0.8:
+            priority_level = "critical"
+            prefix = "Critical error: "
+        elif risk_level >= 0.5:
+            priority_level = "warning"
+            prefix = "Warning: "
         else:
-            message = f"Risk detected: {details if details else 'Exercise caution'}."
+            priority_level = "information"
+            prefix = "Note: "
             
-        self.speak(message, priority_level=priority)
-    
-    def instruct_correction(self, mistake_type, correction):
+        # Create warning message
+        if description:
+            warning_message = f"{prefix}{description}"
+        else:
+            warning_message = f"{prefix}Potential error detected of type {mistake_type}"
+            
+        # Use personalized guidance if available
+        if self.user_profile:
+            self.provide_personalized_guidance(
+                warning_message, 
+                priority_level=priority_level
+            )
+        else:
+            self.speak(warning_message, priority_level=priority_level)
+            
+    def provide_tool_guidance(self, current_tools, recommended_tools):
         """
-        Provide correction instruction.
+        Provide guidance on tool usage.
         
         Args:
-            mistake_type: Type of mistake detected
-            correction: Correction instructions
+            current_tools: List of currently detected tools
+            recommended_tools: List of recommended tools for the current phase
         """
-        message = f"Correction needed: {correction}"
-        self.speak(message, priority_level="instruction")
+        # Check if any recommended tools are not being used
+        missing_tools = [tool for tool in recommended_tools if tool not in current_tools]
         
+        if missing_tools and self.feedback_level != "minimal":
+            missing_tool = missing_tools[0]  # Just mention the first missing tool
+            
+            # Use personalized guidance if available
+            if self.user_profile:
+                self.provide_personalized_guidance(
+                    f"Consider using {missing_tool} for this step.",
+                    priority_level="information"
+                )
+            else:
+                self.speak(f"Consider using {missing_tool} for this step.", 
+                           priority_level="information")
+                           
+    def notify_critical_view_achieved(self, is_achieved, missing_criteria=None):
+        """
+        Notify about critical view of safety status.
+        
+        Args:
+            is_achieved: Whether critical view of safety is achieved
+            missing_criteria: List of missing criteria if not achieved
+        """
+        if is_achieved:
+            # Use personalized guidance if available
+            if self.user_profile:
+                self.provide_personalized_guidance(
+                    "Critical view of safety achieved. Safe to proceed.",
+                    priority_level="instruction"
+                )
+            else:
+                self.speak("Critical view of safety achieved. Safe to proceed.", 
+                           priority_level="instruction")
+        elif missing_criteria and self.feedback_level != "minimal":
+            criteria_str = ", ".join(missing_criteria)
+            
+            # Use personalized guidance if available
+            if self.user_profile:
+                self.provide_personalized_guidance(
+                    f"Critical view not yet achieved. Missing: {criteria_str}",
+                    priority_level="warning"
+                )
+            else:
+                self.speak(f"Critical view not yet achieved. Missing: {criteria_str}", 
+                           priority_level="warning")
+    
     def acknowledge_correct_action(self):
         """Provide positive feedback for correct action."""
         if self.feedback_level == "full":
@@ -483,9 +637,13 @@ class VoiceAssistant:
                 "Well executed.",
                 "Proper approach."
             ]
-            import random
             message = random.choice(messages)
-            self.speak(message, priority_level="feedback")
+            
+            # Use personalized guidance if available
+            if self.user_profile:
+                self.provide_personalized_guidance(message, priority_level="feedback")
+            else:
+                self.speak(message, priority_level="feedback")
             
     def listen_for_command(self):
         """

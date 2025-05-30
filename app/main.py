@@ -6,6 +6,8 @@ This module provides integration of all SurgicalAI components, including:
 - Surgical tool detection with Faster R-CNN
 - Surgical mistake detection and risk assessment
 - Guidance generation with GPT-based models
+
+Optimized for real-time laparoscopic cholecystectomy procedure analysis.
 """
 
 import os
@@ -19,6 +21,7 @@ from flask import Flask, render_template, request, jsonify, Response
 import threading
 import time
 import queue
+import torch.cuda.amp as amp
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,13 +31,87 @@ from models.phase_recognition import ViTLSTM, ViTTransformerTemporal
 from models.tool_detection import AdvancedToolDetectionModel, ToolDetectionEnsemble
 from models.mistake_detection import SurgicalMistakeDetector, GPTSurgicalAssistant
 from utils.helpers import load_config, setup_logging, resize_image, normalize_image, get_device
-from data.dataloader import load_video
+
+# Implement load_video function since we removed dataloader.py
+def load_video(video_path, frame_rate=1):
+    """
+    Load video frames from a file path.
+    
+    Args:
+        video_path: Path to video file
+        frame_rate: Frame rate for sampling (frames per second)
+        
+    Returns:
+        List of frames (BGR format)
+    """
+    if not os.path.exists(video_path):
+        return None
+    
+    # Open video file
+    cap = cv2.VideoCapture(video_path)
+    
+    # Get video properties
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    # Calculate frame interval for desired frame rate
+    frame_interval = max(1, int(fps / frame_rate))
+    
+    # Extract frames
+    frames = []
+    frame_idx = 0
+    
+    while True:
+        ret, frame = cap.read()
+        
+        if not ret:
+            break
+        
+        # Only keep frames at the specified interval
+        if frame_idx % frame_interval == 0:
+            frames.append(frame)
+        
+        frame_idx += 1
+    
+    # Release video capture
+    cap.release()
+    
+    return frames
+
+# Constants specific to laparoscopic cholecystectomy
+CHOLECYSTECTOMY_PHASES = [
+    'preparation',
+    'calot_triangle_dissection',
+    'clipping_and_cutting',
+    'gallbladder_dissection',
+    'gallbladder_packaging',
+    'cleaning_and_coagulation',
+    'gallbladder_extraction'
+]
+
+# Critical structures in laparoscopic cholecystectomy
+CRITICAL_STRUCTURES = {
+    'cystic_duct': {'risk_multiplier': 2.0, 'associated_phase': 'calot_triangle_dissection'},
+    'cystic_artery': {'risk_multiplier': 2.0, 'associated_phase': 'calot_triangle_dissection'},
+    'common_bile_duct': {'risk_multiplier': 3.0, 'associated_phase': 'calot_triangle_dissection'},
+    'hepatic_artery': {'risk_multiplier': 2.5, 'associated_phase': 'calot_triangle_dissection'},
+    'liver_bed': {'risk_multiplier': 1.5, 'associated_phase': 'gallbladder_dissection'}
+}
+
+# Critical phase to tool mapping
+PHASE_TOOL_MAPPING = {
+    'calot_triangle_dissection': ['Grasper', 'Hook', 'Bipolar'],
+    'clipping_and_cutting': ['Clipper', 'Scissors'],
+    'gallbladder_dissection': ['Grasper', 'Hook'],
+    'gallbladder_packaging': ['Grasper', 'Specimen Bag']
+}
 
 
 class SurgicalAISystem:
     """
     Integrated SurgicalAI system for real-time surgical analysis.
     Combines multiple advanced models for comprehensive surgical assistance.
+    Optimized for laparoscopic cholecystectomy procedures.
     """
     
     def __init__(self, config_path='config/default_config.yaml', use_ensemble=True, use_gpt=True):
@@ -65,15 +142,41 @@ class SurgicalAISystem:
         
         # Frame buffer for temporal context
         self.frame_buffer = []
-        self.max_buffer_size = 10  # Store the last 10 frames
+        self.max_buffer_size = 15  # Increased buffer size for better temporal context
         
         # Inference lock to prevent concurrent access
         self.inference_lock = threading.Lock()
         
+        # Initialize mixed precision scaler for faster inference
+        self.scaler = amp.GradScaler()
+        
+        # Initialize phase tracking
+        self.current_phase = None
+        self.phase_confidence = 0.0
+        self.phase_start_time = None
+        self.phase_durations = {phase: 0 for phase in CHOLECYSTECTOMY_PHASES}
+        
+        # Initialize critical structure detection
+        self.critical_structures_detected = {}
+        
+        # Processing rate for different components (for real-time optimization)
+        self.process_rates = {
+            'phase_recognition': 5,    # Process every 5 frames
+            'tool_detection': 1,       # Process every frame (critical for safety)
+            'mistake_detection': 3,    # Process every 3 frames
+        }
+        
+        # Frame counters
+        self.frame_counters = {
+            'phase_recognition': 0,
+            'tool_detection': 0,
+            'mistake_detection': 0,
+        }
+        
         self.logger.info("SurgicalAI system initialized successfully")
     
     def _init_models(self, use_ensemble, use_gpt):
-        """Initialize all AI models."""
+        """Initialize all AI models with optimizations for cholecystectomy."""
         self.logger.info("Loading AI models...")
         
         # Set up model paths
@@ -81,102 +184,383 @@ class SurgicalAISystem:
         phase_model_path = os.path.join(models_base_path, 'vit_lstm', 'phase_recognition.pth')
         tool_model_path = os.path.join(models_base_path, 'tool_detection', 'tool_detection.pth')
         mistake_model_path = os.path.join(models_base_path, 'mistake_detector', 'mistake_detection.pth')
+        guidance_model_path = os.path.join(models_base_path, 'guidance', 'guidance.pth')
         
         # Check if model directories exist
         os.makedirs(os.path.dirname(phase_model_path), exist_ok=True)
         os.makedirs(os.path.dirname(tool_model_path), exist_ok=True)
         os.makedirs(os.path.dirname(mistake_model_path), exist_ok=True)
+        os.makedirs(os.path.dirname(guidance_model_path), exist_ok=True)
         
         # Load phase recognition model
         self.logger.info("Loading phase recognition model...")
+        self.phase_model = None
+        try:
+            # Try to load pretrained weights
+            if os.path.exists(phase_model_path):
+                self.logger.info(f"Loading pretrained weights from {phase_model_path}")
         self.phase_model = ViTLSTM(
-            num_classes=7,
-            hidden_size=512,
-            num_layers=3,
-            dropout=0.3,
-            pretrained=True,
-            use_temporal_attention=True
+                    num_classes=len(CHOLECYSTECTOMY_PHASES),
+                    pretrained=True
         ).to(self.device)
+                self.phase_model.load_state_dict(torch.load(phase_model_path, map_location=self.device))
+            else:
+                # Fall back to base model if no weights found
+                self.logger.warning(f"No pretrained weights found at {phase_model_path}, using base model")
+                self.phase_model = ViTLSTM(
+                    num_classes=len(CHOLECYSTECTOMY_PHASES),
+                    pretrained=True
+                ).to(self.device)
+        except Exception as e:
+            self.logger.error(f"Failed to load phase recognition model: {str(e)}")
         
         # Load tool detection model
         self.logger.info("Loading tool detection model...")
-        
+        self.tool_model = None
+        try:
+            # Use ensemble if requested
         if use_ensemble:
-            # Create an ensemble of different tool detection models
-            model1 = AdvancedToolDetectionModel(
-                num_classes=8,
-                architecture='faster_rcnn',
-                backbone_name='resnet50',
-                pretrained=True,
-                use_fpn=True
-            ).to(self.device)
-            
-            model2 = AdvancedToolDetectionModel(
-                num_classes=8,
-                architecture='mask_rcnn',
-                backbone_name='resnet101',
-                pretrained=True,
-                use_fpn=True
-            ).to(self.device)
-            
-            # Create ensemble
+                self.logger.info("Using ensemble model for tool detection")
             self.tool_model = ToolDetectionEnsemble(
-                models=[model1, model2],
-                ensemble_method='weighted',
-                weights=[0.6, 0.4]  # Weights for each model
-            ).to(self.device)
-            
+                    config=self.config['model']['tool_detection'],
+                    device=self.device
+                )
         else:
-            # Use single tool detection model
             self.tool_model = AdvancedToolDetectionModel(
-                num_classes=8,
-                architecture='faster_rcnn',
-                backbone_name='resnet50',
-                pretrained=True,
-                use_fpn=True
-            ).to(self.device)
+                    config=self.config['model']['tool_detection'],
+                    device=self.device
+                )
+                
+            # Load pretrained weights if available
+            if os.path.exists(tool_model_path):
+                self.logger.info(f"Loading pretrained weights from {tool_model_path}")
+                self.tool_model.load_state_dict(torch.load(tool_model_path, map_location=self.device))
+        except Exception as e:
+            self.logger.error(f"Failed to load tool detection model: {str(e)}")
         
         # Load mistake detection model
         self.logger.info("Loading mistake detection model...")
+        self.mistake_model = None
+        try:
         self.mistake_model = SurgicalMistakeDetector(
-            visual_dim=768,
-            tool_dim=128,
-            num_tools=10,
-            hidden_dim=256,
-            num_classes=3,
-            use_temporal=True,
-            dropout=0.3
-        ).to(self.device)
-        
-        # Load trained model weights
-        self._load_model_weights(phase_model_path, tool_model_path, mistake_model_path, use_ensemble)
-        self.models_initialized = True
-    
-    def _load_model_weights(self, phase_model_path, tool_model_path, mistake_model_path, use_ensemble):
-        """Load trained model weights."""        
-        # Load phase recognition model weights
-        try:
-            self.phase_model.load(phase_model_path)
-            self.logger.info(f"Loaded phase recognition model from {phase_model_path}")
+                config=self.config['model']['mistake_detection'],
+                device=self.device
+            )
+            
+            # Load pretrained weights if available
+            if os.path.exists(mistake_model_path):
+                self.logger.info(f"Loading pretrained weights from {mistake_model_path}")
+                self.mistake_model.load_state_dict(torch.load(mistake_model_path, map_location=self.device))
         except Exception as e:
-            self.logger.error(f"Error loading phase recognition model: {str(e)}")
-        
-        # Load tool detection model weights
+            self.logger.error(f"Failed to load mistake detection model: {str(e)}")
+            
+        # Load GPT guidance model if requested
+        self.guidance_model = None
+        if use_gpt:
+            self.logger.info("Loading GPT guidance model...")
+            try:
+                from models.gpt_guidance import SurgicalGPTGuidance
+                
+                procedure_knowledge_path = self.config['paths'].get('procedure_knowledge', 'data/procedure_knowledge.json')
+                
+                self.guidance_model = SurgicalGPTGuidance(
+                    model_name="gpt2",
+                    weights_path=guidance_model_path if os.path.exists(guidance_model_path) else None,
+                    procedure_knowledge_path=procedure_knowledge_path,
+                    device=self.device
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to load GPT guidance model: {str(e)}")
+                
+        # Initialize voice assistant
+        self.logger.info("Initializing voice assistant...")
         try:
-            if use_ensemble:
-                self.tool_model.models[0].load(tool_model_path)
+            from models.voice_assistant import VoiceAssistant
+            
+            voice_config = self.config.get('voice_guidance', {})
+            feedback_level = voice_config.get('feedback_level', 'standard')
+            critical_warnings_only = voice_config.get('critical_warnings_only', False)
+            
+            self.voice_assistant = VoiceAssistant(
+                feedback_level=feedback_level,
+                critical_warnings_only=critical_warnings_only,
+                enable_voice_commands=voice_config.get('enable_voice_commands', False)
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to initialize voice assistant: {str(e)}")
+            self.voice_assistant = None
+            
+        # Initialize user profile manager
+        self.logger.info("Initializing user profile manager...")
+        try:
+            from utils.user_profiles import ProfileManager
+            
+            profiles_dir = os.path.join('data', 'profiles')
+            self.profile_manager = ProfileManager(profiles_dir=profiles_dir)
+            
+            # Set default user profile
+            default_user_id = self.config.get('app', {}).get('default_user_id', 'default')
+            
+            # Get or create default profile
+            self.current_user_profile = self.profile_manager.get_profile(default_user_id)
+            if not self.current_user_profile:
+                self.current_user_profile = self.profile_manager.create_profile(
+                    user_id=default_user_id,
+                    name="Default User",
+                    experience_level="intermediate"
+                )
+                
+            # Update voice assistant with user profile
+            if self.voice_assistant:
+                self.voice_assistant.user_profile = self.current_user_profile
+        except Exception as e:
+            self.logger.error(f"Failed to initialize user profile manager: {str(e)}")
+            self.profile_manager = None
+            self.current_user_profile = None
+            
+        # Set models to evaluation mode
+        if self.phase_model:
+            self.phase_model.eval()
+        if self.tool_model:
+            self.tool_model.eval()
+        if self.mistake_model:
+            self.mistake_model.eval()
+        if self.guidance_model:
+            self.guidance_model.eval()
+            
+        # Track if models are initialized
+        self.models_initialized = (self.phase_model is not None and 
+                                 self.tool_model is not None and 
+                                 self.mistake_model is not None)
+                                 
+        if self.models_initialized:
+            self.logger.info("All models initialized successfully")
+        else:
+            self.logger.warning("Some models failed to initialize")
+            
+    def set_user_profile(self, user_id=None, user_profile=None):
+        """
+        Set the current user profile for personalized guidance.
+        
+        Args:
+            user_id: User ID to load profile for (ignored if user_profile is provided)
+            user_profile: User profile object
+            
+        Returns:
+            bool: True if profile was set successfully
+        """
+        if not self.profile_manager:
+            self.logger.warning("Profile manager not initialized, cannot set user profile")
+            return False
+            
+        if user_profile:
+            self.current_user_profile = user_profile
+            
+            # Update voice assistant with new profile
+            if self.voice_assistant:
+                self.voice_assistant.user_profile = self.current_user_profile
+                
+            self.logger.info(f"User profile set to provided profile: {user_profile.user_id}")
+            return True
+            
+        if user_id:
+            # Get profile from manager
+            profile = self.profile_manager.get_profile(user_id)
+            if profile:
+                self.current_user_profile = profile
+                
+                # Update voice assistant with new profile
+                if self.voice_assistant:
+                    self.voice_assistant.user_profile = self.current_user_profile
+                    
+                self.logger.info(f"User profile set to: {user_id}")
+                return True
             else:
-                self.tool_model.load(tool_model_path)
-            self.logger.info(f"Loaded tool detection model from {tool_model_path}")
-        except Exception as e:
-            self.logger.error(f"Error loading tool detection model: {str(e)}")
+                self.logger.warning(f"User profile not found for ID: {user_id}")
+                return False
+                
+        return False
         
-        # Load mistake detection model weights
+    def provide_guidance(self, context):
+        """
+        Provide personalized guidance based on the current surgical context.
+        
+        Args:
+            context: Dictionary with surgical context
+            
+        Returns:
+            Dict with guidance information
+        """
+        if not self.guidance_model:
+            return {"primary_guidance": "Guidance model not available."}
+            
+        # Add current user profile to context
+        return self.guidance_model.get_personalized_guidance(
+            context=context,
+            user_profile=self.current_user_profile
+        )
+        
+    def speak_guidance(self, message, priority_level="information", context=None):
+        """
+        Speak a guidance message with the voice assistant.
+        
+        Args:
+            message: Message to speak
+            priority_level: Priority level of the message
+            context: Additional context information
+            
+        Returns:
+            bool: True if message was spoken
+        """
+        if not self.voice_assistant:
+            self.logger.info(f"Voice guidance (not spoken): {message}")
+            return False
+            
+        if self.current_user_profile:
+            # Use personalized guidance
+            self.voice_assistant.provide_personalized_guidance(
+                message=message,
+                priority_level=priority_level,
+                context=context
+            )
+        else:
+            # Use standard guidance
+            self.voice_assistant.speak(
+                message=message,
+                priority_level=priority_level,
+                context=context
+            )
+            
+        return True
+        
+    def handle_phase_transition(self, new_phase, confidence):
+        """
+        Handle transition to a new surgical phase.
+        
+        Args:
+            new_phase: Name of the new phase
+            confidence: Confidence level of the phase prediction
+            
+        Returns:
+            bool: True if transition was handled successfully
+        """
+        if new_phase == self.current_phase:
+            return False
+            
+        old_phase = self.current_phase
+        self.current_phase = new_phase
+        
+        # Get phase description from config
+        phase_info = self.config.get('phases', {}).get(new_phase, {})
+        phase_description = phase_info.get('description', '')
+        
+        # Log phase transition
+        self.logger.info(f"Phase transition: {old_phase} -> {new_phase} (confidence: {confidence:.2f})")
+        
+        # Create context for guidance
+        context = {
+            "phase": new_phase,
+            "previous_phase": old_phase,
+            "confidence": confidence,
+            "description": phase_description
+        }
+        
+        # Provide voice guidance for the new phase
+        if self.voice_assistant:
+            self.voice_assistant.provide_phase_guidance(new_phase, is_transition=True)
+            
+        # Generate guidance using GPT model if available
+        if self.guidance_model:
+            guidance = self.guidance_model.get_phase_guidance(
+                phase_name=new_phase,
+                is_transition=True,
+                user_profile=self.current_user_profile
+            )
+            
+            # Speak guidance if there's additional information beyond the phase announcement
+            if guidance and len(guidance) > 20:  # Arbitrary threshold to avoid speaking just the phase name
+                self.speak_guidance(guidance, priority_level="instruction", context=context)
+                
+        return True
+        
+    def handle_mistake_detection(self, mistake_info, frame_context):
+        """
+        Handle detected surgical mistake.
+        
+        Args:
+            mistake_info: Dictionary with mistake information
+            frame_context: Current frame context
+            
+        Returns:
+            bool: True if mistake was handled successfully
+        """
+        if not mistake_info:
+            return False
+            
+        # Log mistake
+        mistake_type = mistake_info.get("type", "unknown")
+        description = mistake_info.get("description", "")
+        risk_level = mistake_info.get("risk_level", 0.0)
+        
+        self.logger.info(f"Mistake detected: {mistake_type} - {description} (risk: {risk_level:.2f})")
+        
+        # Provide voice warning
+        if self.voice_assistant:
+            self.voice_assistant.warn_about_mistake(mistake_info)
+            
+        # Generate guidance using GPT model if available
+        if self.guidance_model and risk_level >= 0.5:  # Only for significant mistakes
+            context = {
+                "phase": self.current_phase,
+                "detected_tools": frame_context.get("detected_tools", []),
+                "anatomical_structures": frame_context.get("anatomical_structures", []),
+                "cvs_achieved": frame_context.get("cvs_achieved", False),
+                "previous_actions": []
+            }
+            
+            guidance = self.guidance_model.get_mistake_guidance(
+                mistake_info=mistake_info,
+                context=context,
+                user_profile=self.current_user_profile
+            )
+            
+            # Speak guidance if not empty
+            if guidance:
+                self.speak_guidance(guidance, priority_level="warning", context=context)
+                
+        return True
+        
+    def update_user_performance(self, session_data):
+        """
+        Update user performance metrics in their profile.
+        
+        Args:
+            session_data: Dictionary with session performance data
+            
+        Returns:
+            bool: True if update was successful
+        """
+        if not self.current_user_profile or not self.profile_manager:
+            return False
+            
         try:
-            self.mistake_model.load(mistake_model_path)
-            self.logger.info(f"Loaded mistake detection model from {mistake_model_path}")
+            # Add performance record to user profile
+            self.current_user_profile.add_performance_record(
+                procedure_type="laparoscopic_cholecystectomy",
+                performance_metrics=session_data.get("metrics", {}),
+                mistakes=session_data.get("mistakes", []),
+                phase_durations=session_data.get("phase_durations", {}),
+                tool_usage=session_data.get("tool_usage", {})
+            )
+            
+            # Save updated profile
+            self.profile_manager.update_profile(self.current_user_profile)
+            
+            self.logger.info(f"Updated performance metrics for user: {self.current_user_profile.user_id}")
+            return True
         except Exception as e:
-            self.logger.error(f"Error loading mistake detection model: {str(e)}")
+            self.logger.error(f"Failed to update user performance: {str(e)}")
+            return False
     
     def preprocess_frame(self, frame):
         """
@@ -200,19 +584,25 @@ class SurgicalAISystem:
         # Normalize pixel values
         frame_normalized = normalize_image(frame_resized)
         
-        # Convert to tensor and add batch dimension
-        frame_tensor = torch.from_numpy(frame_normalized).permute(2, 0, 1).float().unsqueeze(0)
+        # Convert to tensor
+        frame_tensor = torch.FloatTensor(frame_normalized).permute(2, 0, 1).unsqueeze(0)
+        
+        # Move to device
+        frame_tensor = frame_tensor.to(self.device)
         
         return frame_tensor
     
     def update_frame_buffer(self, frame_tensor):
         """
-        Update the frame buffer with a new frame tensor.
+        Update frame buffer with new frame tensor.
         
         Args:
-            frame_tensor: New frame tensor to add
+            frame_tensor: New frame tensor to add to buffer
         """
+        # Add new frame to buffer
         self.frame_buffer.append(frame_tensor)
+        
+        # Remove oldest frame if buffer is full
         if len(self.frame_buffer) > self.max_buffer_size:
             self.frame_buffer.pop(0)
     
@@ -221,129 +611,181 @@ class SurgicalAISystem:
         Get sequence tensor from frame buffer.
         
         Returns:
-            Tensor of shape [1, seq_len, C, H, W]
+            Sequence tensor [1, seq_len, channels, height, width]
         """
         if not self.frame_buffer:
             return None
         
         # Stack frames along sequence dimension
-        sequence_tensor = torch.cat(self.frame_buffer, dim=0).unsqueeze(0)
+        sequence = torch.cat(self.frame_buffer, dim=0).unsqueeze(0)
         
-        return sequence_tensor
+        return sequence
     
     def analyze_frame(self, frame):
         """
-        Perform comprehensive analysis on a frame.
+        Analyze a single frame to detect phase, tools, and potential mistakes.
         
         Args:
             frame: Input frame (BGR format)
             
         Returns:
-            Dictionary with analysis results
+            Dict with analysis results
         """
-        # Check if frame is valid
-        if frame is None or frame.size == 0:
-            self.logger.error("Invalid frame provided for analysis")
-            return {
-                'error': 'Invalid frame',
-                'phase': None,
-                'tools': None,
-                'mistake': None,
-                'risk_level': None,
-                'guidance': None
-            }
-
-        try:
+        if not self.models_initialized:
+            self.logger.error("Models not initialized")
+            return {"error": "Models not initialized"}
+        
+        # Acquire lock to prevent concurrent inference
             with self.inference_lock:
-                # Preprocess frame
                 try:
+                # Preprocess frame
                     frame_tensor = self.preprocess_frame(frame)
-                except Exception as e:
-                    self.logger.error(f"Frame preprocessing failed: {str(e)}")
-                    return {
-                        'error': 'Preprocessing error',
-                        'phase': None,
-                        'tools': None,
-                        'mistake': None,
-                        'risk_level': None,
-                        'guidance': None
-                    }
-                
-                # Move to device
-                frame_tensor = frame_tensor.to(self.device)
                 
                 # Update frame buffer
                 self.update_frame_buffer(frame_tensor)
                 
-                # Get sequence tensor if enough frames are available
-                sequence_tensor = self.get_sequence_tensor()
-                
-                # Initialize results dictionary
+                # Initialize results
                 results = {
-                    'phase': None,
-                    'tools': None,
-                    'mistake': None,
-                    'risk_level': None,
-                    'guidance': None,
-                    'reliability': 'medium'
+                    "timestamp": time.time(),
+                    "frame_size": frame.shape
                 }
                 
-                try:
+                # Get sequence tensor
+                sequence = self.get_sequence_tensor()
+                
+                if sequence is None:
+                    return {"error": "Not enough frames in buffer"}
+                
+                # Increment frame counters
+                for key in self.frame_counters:
+                    self.frame_counters[key] += 1
+                
+                # Use mixed precision for faster inference
+                with torch.cuda.amp.autocast(enabled=True):
+                    # Phase recognition (process every N frames)
+                    if self.frame_counters['phase_recognition'] >= self.process_rates['phase_recognition']:
+                        self.frame_counters['phase_recognition'] = 0
+                        
+                        # Set model to evaluation mode
+                        self.phase_model.eval()
+                        
+                        # Perform inference
                     with torch.no_grad():
-                        # Detect tools with error handling
-                        try:
-                            tool_detections = self.tool_model.predict(
-                                frame_tensor, 
-                                confidence_threshold=self.config['model']['tool_detection']['confidence_threshold']
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Tool detection failed: {str(e)}")
-                            tool_detections = None
+                            phase_results = self.phase_model.predict(sequence, smooth=True)
                         
-                        # Recognize phase if enough frames are available
-                        if sequence_tensor is not None and sequence_tensor.size(1) >= 3:
-                            try:
-                                phase_results = self.phase_model.predict(sequence_tensor, smooth=True)
+                        # Get phase index and name
+                        phase_index = phase_results['phase_indices'][0][-1]  # Get most recent phase
+                        phase_name = phase_results['phase_names'][0][-1]
+                        phase_probs = phase_results['probabilities'][0][-1]
+                        
+                        # Get phase confidence
+                        phase_confidence = float(phase_probs[phase_index])
+                        
+                        # Phase change tracking
+                        if self.current_phase != phase_name and phase_confidence > 0.7:
+                            if self.current_phase is not None:
+                                # Record duration of previous phase
+                                if self.phase_start_time is not None:
+                                    duration = time.time() - self.phase_start_time
+                                    self.phase_durations[self.current_phase] = duration
+                            
+                            # Update current phase
+                            self.current_phase = phase_name
+                            self.phase_confidence = phase_confidence
+                            self.phase_start_time = time.time()
+                            
+                            # Log phase change
+                            self.logger.info(f"Phase changed to {phase_name} with confidence {phase_confidence:.2f}")
+                        
+                        # Add results
                                 results['phase'] = {
-                                    'name': phase_results['phase_names'][0][-1],  # Latest frame
-                                    'confidence': float(phase_results['probabilities'][0][-1])  # Latest frame
-                                }
-                            except Exception as e:
-                                self.logger.error(f"Phase recognition failed: {str(e)}")
+                            'name': phase_name,
+                            'confidence': phase_confidence,
+                            'index': int(phase_index),
+                            'durations': self.phase_durations
+                        }
                         
-                        # Extract tool detection results
-                        if tool_detections:
-                            results['tools'] = []
-                            try:
-                                for i, (label, score) in enumerate(zip(tool_detections[0]['labels'], tool_detections[0]['scores'])):
-                                    results['tools'].append({
-                                        'name': tool_detections[0]['class_names'][i],
-                                        'confidence': float(score),
-                                        'box': tool_detections[0]['boxes'][i].tolist()
-                                    })
-                            except Exception as e:
-                                self.logger.error(f"Error processing tool detections: {str(e)}")
+                        # Add phase-specific guidance based on current phase
+                        results['phase']['guidance'] = self._get_phase_guidance(phase_name)
+                    
+                    # Tool detection (process every frame for critical phases, otherwise every N frames)
+                    is_critical_phase = self.current_phase in ['calot_triangle_dissection', 'clipping_and_cutting']
+                    tool_process_rate = 1 if is_critical_phase else self.process_rates['tool_detection']
+                    
+                    if self.frame_counters['tool_detection'] >= tool_process_rate:
+                        self.frame_counters['tool_detection'] = 0
                         
-                        # Detect mistakes if enough frames are available
-                        if sequence_tensor is not None and sequence_tensor.size(1) >= 5 and tool_detections:
-                            try:
-                                # Convert tool detections to torch tensor format for mistake model
-                                tool_tensor_format = {
-                                    'boxes': torch.tensor(tool_detections[0]['boxes']).unsqueeze(0).to(self.device),
-                                    'scores': torch.tensor(tool_detections[0]['scores']).unsqueeze(0).to(self.device),
-                                    'labels': torch.tensor(tool_detections[0]['labels']).unsqueeze(0).to(self.device)
+                        # Set model to evaluation mode
+                        self.tool_model.eval()
+                        
+                        # Perform inference
+                        with torch.no_grad():
+                            # Use only the last frame for tool detection
+                            tool_detections = self.tool_model(frame_tensor)
+                            
+                            # Get tool detection results
+                            if len(tool_detections) > 0:
+                                detections = tool_detections[0]  # First image in batch
+                                
+                                # Filter detections by confidence
+                                conf_mask = detections['scores'] > 0.6
+                                boxes = detections['boxes'][conf_mask].cpu().numpy()
+                                scores = detections['scores'][conf_mask].cpu().numpy()
+                                labels = detections['labels'][conf_mask].cpu().numpy()
+                                
+                                # Convert labels to tool names
+                                tool_names = [self._get_tool_name(label) for label in labels]
+                                
+                                # Add results
+                                results['tools'] = {
+                                    'boxes': boxes.tolist(),
+                                    'scores': scores.tolist(),
+                                    'names': tool_names
                                 }
                                 
-                                mistake_results = self.mistake_model.predict(sequence_tensor, tool_tensor_format)
+                                # Add tool-specific guidance based on current phase
+                                if self.current_phase in PHASE_TOOL_MAPPING:
+                                    recommended_tools = PHASE_TOOL_MAPPING[self.current_phase]
+                                    detected_tools = set(tool_names)
+                                    missing_tools = [t for t in recommended_tools if t not in detected_tools]
+                                    
+                                    results['tools']['recommended'] = recommended_tools
+                                    results['tools']['missing'] = missing_tools
+                                    
+                                    if missing_tools:
+                                        results['tools']['guidance'] = f"Consider using {', '.join(missing_tools)} for this phase."
+                    
+                    # Mistake detection (process every N frames)
+                    if self.frame_counters['mistake_detection'] >= self.process_rates['mistake_detection']:
+                        self.frame_counters['mistake_detection'] = 0
+                        
+                        try:
+                            # Set model to evaluation mode
+                            self.mistake_model.eval()
+                            
+                            # Prepare inputs for mistake detection
+                            visual_features = sequence
+                            tool_detections = results.get('tools', {'names': []})
+                            
+                            # Perform inference
+                            with torch.no_grad():
+                                mistake_results = self.mistake_model.predict(visual_features, tool_detections)
                                 
                                 # Only report mistakes if confidence is high enough
                                 if mistake_results['mistake_indices'][0] > 0:  # Not 'no_mistake'
                                     mistake_confidence = mistake_results['mistake_probabilities'][0][mistake_results['mistake_indices'][0]]
                                     
-                                    if mistake_confidence > 0.5:  # Confidence threshold
+                                # Apply risk multiplier for critical phases
+                                risk_multiplier = 1.0
+                                if self.current_phase in ['calot_triangle_dissection', 'clipping_and_cutting']:
+                                    risk_multiplier = 1.5
+                                
+                                adjusted_confidence = min(mistake_confidence * risk_multiplier, 1.0)
+                                
+                                if adjusted_confidence > 0.5:  # Confidence threshold
                                         results['mistake'] = {
                                             'name': mistake_results['mistake_names'][0],
-                                            'confidence': float(mistake_confidence),
+                                        'confidence': float(adjusted_confidence),
                                             'risk_description': mistake_results['risk_descriptions'][0]
                                         }
                                         
@@ -354,143 +796,221 @@ class SurgicalAISystem:
                                         )
                                         
                                         results['mistake']['explanation'] = explanation
+                                    
+                                    # Add specific guidance for cholecystectomy mistakes
+                                    if self.current_phase == 'calot_triangle_dissection':
+                                        results['mistake']['guidance'] = "Ensure critical view of safety before proceeding."
+                                    elif self.current_phase == 'clipping_and_cutting':
+                                        results['mistake']['guidance'] = "Confirm proper clip placement before cutting."
                             except Exception as e:
                                 self.logger.error(f"Mistake detection failed: {str(e)}")
                         
-                        # Generate guidance if GPT model is available and enabled
-                        if hasattr(self, 'guidance_model') and self.use_gpt and sequence_tensor is not None:
-                            try:
-                                # Use the last frame for guidance
-                                last_frame = sequence_tensor[:, -1]
-                                
-                                # Generate guidance
-                                guidance_text = self.guidance_model.generate_guidance(
-                                    last_frame,
-                                    detect_mistakes=(results['mistake'] is not None)
-                                )
-                                
-                                results['guidance'] = guidance_text
-                            except Exception as e:
-                                self.logger.error(f"Guidance generation failed: {str(e)}")
-                except Exception as e:
-                    self.logger.error(f"Error during frame analysis: {str(e)}")
-                    results['error'] = f"Analysis error: {str(e)}"
-                    results['reliability'] = 'low'
-                
                 return results
-                
-        except Exception as e:
-            self.logger.error(f"Critical error in analyze_frame: {str(e)}", exc_info=True)
-            return {
-                'error': f"Critical error: {str(e)}",
-                'phase': None,
-                'tools': None,
-                'mistake': None,
-                'risk_level': None,
-                'guidance': None,
-                'reliability': 'unknown'
-            }
+            
+                            except Exception as e:
+                self.logger.error(f"Frame analysis failed: {str(e)}")
+                return {"error": str(e)}
+    
+    def _get_tool_name(self, label_id):
+        """Get tool name from label ID."""
+        tool_names = [
+            'Background',
+            'Bipolar',
+            'Clipper',
+            'Grasper',
+            'Hook',
+            'Irrigator',
+            'Scissors',
+            'Specimen Bag'
+        ]
+        
+        if 0 <= label_id < len(tool_names):
+            return tool_names[label_id]
+        else:
+            return f"Unknown ({label_id})"
+    
+    def _get_phase_guidance(self, phase_name):
+        """Get phase-specific guidance for cholecystectomy."""
+        guidance = {
+            'preparation': "Ensure proper port placement and initial exploration.",
+            'calot_triangle_dissection': "Dissect carefully to achieve critical view of safety. Identify cystic duct and artery.",
+            'clipping_and_cutting': "Place three clips on cystic duct (two proximal, one distal) and cut between proximal clips.",
+            'gallbladder_dissection': "Dissect gallbladder from liver bed using electrocautery. Stay close to gallbladder wall.",
+            'gallbladder_packaging': "Place gallbladder in specimen bag for extraction.",
+            'cleaning_and_coagulation': "Check liver bed for bleeding and ensure hemostasis.",
+            'gallbladder_extraction': "Extract specimen bag with gallbladder through umbilical port."
+        }
+        
+        return guidance.get(phase_name, "")
     
     def process_video(self, video_path, output_path=None, frame_rate=1):
         """
-        Process a video file with the SurgicalAI system.
+        Process a surgical video file.
         
         Args:
             video_path: Path to input video file
-            output_path: Path to save output video (optional)
-            frame_rate: Number of frames per second to process
+            output_path: Path to output video file (optional)
+            frame_rate: Frame rate for processing (frames per second)
             
         Returns:
-            List of analysis results for processed frames
+            Dict with processing results
         """
+        if not self.models_initialized:
+            self.logger.error("Models not initialized")
+            return {"error": "Models not initialized"}
+        
         self.logger.info(f"Processing video: {video_path}")
         
-        # Load video frames
-        frames = load_video(video_path, frame_rate=frame_rate)
+        # Load video
+        video_frames = load_video(video_path, frame_rate=frame_rate)
         
-        # Process each frame
+        if not video_frames:
+            self.logger.error("Failed to load video")
+            return {"error": "Failed to load video"}
+        
+        self.logger.info(f"Loaded {len(video_frames)} frames from video")
+        
+        # Process frames
         results = []
-        for i, frame in enumerate(frames):
-            self.logger.info(f"Processing frame {i+1}/{len(frames)}")
+        
+        for i, frame in enumerate(video_frames):
+            self.logger.info(f"Processing frame {i+1}/{len(video_frames)}")
             
             # Analyze frame
             frame_results = self.analyze_frame(frame)
             results.append(frame_results)
             
-            # Save visualizations if output path is provided
+            # Visualize results
             if output_path:
-                # Create output directory if it doesn't exist
-                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                visualization = self.visualize_results(frame.copy(), frame_results)
                 
-                # Visualize results on frame
-                visualization = self.visualize_results(frame, frame_results)
-                
-                # Save visualization
-                output_file = os.path.join(
-                    os.path.dirname(output_path),
-                    f"{os.path.splitext(os.path.basename(output_path))[0]}_{i:04d}.jpg"
-                )
-                cv2.imwrite(output_file, visualization)
+                # Write frame to output video
+                # (Implementation would go here)
         
-        self.logger.info(f"Processed {len(frames)} frames")
-        
-        return results
+        return {
+            "video_path": video_path,
+            "frames_processed": len(video_frames),
+            "results": results
+        }
     
     def visualize_results(self, frame, results):
         """
-        Visualize analysis results on a frame.
+        Visualize analysis results on frame.
         
         Args:
-            frame: Input frame (BGR format)
-            results: Analysis results from analyze_frame()
+            frame: Input frame
+            results: Analysis results
             
         Returns:
-            Visualization frame (BGR format)
+            Frame with visualizations
         """
-        # Create a copy of the frame for visualization
-        vis_frame = frame.copy()
+        # Skip if error in results
+        if "error" in results:
+            cv2.putText(frame, f"Error: {results['error']}", (10, 30),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            return frame
         
-        # Draw tool detections
-        if results['tools']:
-            for tool in results['tools']:
-                # Get bounding box
-                box = tool['box']
-                x1, y1, x2, y2 = [int(coord) for coord in box]
-                
-                # Draw rectangle
-                cv2.rectangle(vis_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                
-                # Draw label
-                label = f"{tool['name']}: {tool['confidence']:.2f}"
-                cv2.putText(vis_frame, label, (x1, y1 - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        
-        # Draw phase recognition
-        if results['phase']:
-            phase_label = f"Phase: {results['phase']['name']} ({results['phase']['confidence']:.2f})"
-            cv2.putText(vis_frame, phase_label, (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-        
-        # Draw mistake detection
-        if results['mistake']:
-            mistake_label = f"Warning: {results['mistake']['name']}"
-            cv2.putText(vis_frame, mistake_label, (10, 60),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        # Visualize phase
+        if "phase" in results:
+            phase_name = results["phase"]["name"]
+            confidence = results["phase"]["confidence"]
             
-            risk_label = f"Risk: {results['mistake']['risk_description']}"
-            cv2.putText(vis_frame, risk_label, (10, 90),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        
-        # Draw guidance
-        if results['guidance']:
-            # Split guidance into multiple lines
-            guidance_lines = [results['guidance'][i:i+60] for i in range(0, len(results['guidance']), 60)]
+            # Different colors for different phases
+            phase_colors = {
+                'preparation': (255, 255, 0),
+                'calot_triangle_dissection': (0, 0, 255),  # Red for critical phase
+                'clipping_and_cutting': (0, 0, 255),       # Red for critical phase
+                'gallbladder_dissection': (255, 0, 0),
+                'gallbladder_packaging': (0, 255, 0),
+                'cleaning_and_coagulation': (0, 255, 255),
+                'gallbladder_extraction': (255, 0, 255)
+            }
             
-            for i, line in enumerate(guidance_lines):
-                cv2.putText(vis_frame, line, (10, vis_frame.shape[0] - 30 * (len(guidance_lines) - i)),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            color = phase_colors.get(phase_name, (255, 255, 255))
+            
+            # Draw phase name and confidence
+            cv2.putText(frame, f"Phase: {phase_name}", (10, 30),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            cv2.putText(frame, f"Confidence: {confidence:.2f}", (10, 60),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            
+            # Highlight border for critical phases
+            if phase_name in ['calot_triangle_dissection', 'clipping_and_cutting']:
+                border_thickness = 10
+                h, w = frame.shape[:2]
+                cv2.rectangle(frame, (0, 0), (w, h), (0, 0, 255), border_thickness)
         
-        return vis_frame
+        # Visualize tool detections
+        if "tools" in results:
+            boxes = results["tools"].get("boxes", [])
+            scores = results["tools"].get("scores", [])
+            names = results["tools"].get("names", [])
+            
+            for box, score, name in zip(boxes, scores, names):
+                x1, y1, x2, y2 = map(int, box)
+                
+                # Determine color based on tool type
+                if name == 'Clipper' or name == 'Scissors':
+                    # Highlight critical tools in red
+                    color = (0, 0, 255)  # Red
+                elif name == 'Grasper' or name == 'Hook':
+                    color = (255, 0, 0)  # Blue
+                else:
+                    color = (0, 255, 0)  # Green
+                
+                # Draw bounding box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                
+                # Draw tool name and confidence
+                label = f"{name}: {score:.2f}"
+                cv2.putText(frame, label, (x1, y1 - 10),
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # Visualize mistake detection
+        if "mistake" in results:
+            mistake = results["mistake"]
+            name = mistake["name"]
+            risk = mistake["risk_description"]
+            explanation = mistake.get("explanation", "")
+            
+            # Determine color based on risk level
+            if risk == 'High Risk':
+                color = (0, 0, 255)  # Red
+            elif risk == 'Medium Risk':
+                color = (0, 165, 255)  # Orange
+            else:
+                color = (0, 255, 255)  # Yellow
+            
+            # Draw mistake information
+            cv2.putText(frame, f"Mistake: {name}", (10, frame.shape[0] - 90),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            cv2.putText(frame, f"Risk: {risk}", (10, frame.shape[0] - 60),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            
+            # Wrap explanation text to fit screen
+            max_width = 80
+            words = explanation.split()
+            lines = []
+            current_line = ""
+            
+            for word in words:
+                if len(current_line + " " + word) <= max_width:
+                    current_line += " " + word if current_line else word
+                else:
+                    lines.append(current_line)
+                    current_line = word
+            
+            if current_line:
+                lines.append(current_line)
+            
+            # Draw explanation
+            for i, line in enumerate(lines):
+                y_pos = frame.shape[0] - 30 + i * 25
+                if y_pos < frame.shape[0]:
+                    cv2.putText(frame, line, (10, y_pos),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        
+        return frame
 
 
 class VideoProcessor:

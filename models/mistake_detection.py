@@ -1,8 +1,9 @@
 """
 Surgical mistake detection models for SurgicalAI.
 
-This module implements models for detecting mistakes and providing guidance
-during surgical procedures, using multi-modal inputs and contextual awareness.
+This module implements models for detecting surgical mistakes and assessing
+risk levels during laparoscopic procedures, with specific optimizations for
+cholecystectomy procedures.
 """
 
 import torch
@@ -13,6 +14,7 @@ import logging
 from typing import List, Dict, Tuple, Optional, Union
 import json
 import os
+import torchvision.models as models
 
 logger = logging.getLogger(__name__)
 
@@ -24,37 +26,80 @@ except ImportError:
     logger.warning("transformers package not installed. GPT-based models will not be available.")
     TRANSFORMERS_AVAILABLE = False
 
+# Cholecystectomy-specific constants
+CHOLECYSTECTOMY_CRITICAL_STRUCTURES = {
+    'cystic_duct': 0.85,      # Detection confidence threshold
+    'cystic_artery': 0.85,
+    'common_bile_duct': 0.90,
+    'hepatic_artery': 0.85,
+    'gallbladder': 0.75
+}
+
+CHOLECYSTECTOMY_CRITICAL_PHASES = {
+    'calot_triangle_dissection': 2.0,  # Risk multiplier
+    'clipping_and_cutting': 2.0,
+    'gallbladder_dissection': 1.5
+}
+
+CHOLECYSTECTOMY_SPECIFIC_MISTAKES = {
+    'misidentification': {
+        'description': 'Potential misidentification of biliary structures',
+        'associated_phases': ['calot_triangle_dissection'],
+        'risk_level': 'high'
+    },
+    'clip_placement': {
+        'description': 'Improper clip placement on cystic structures',
+        'associated_phases': ['clipping_and_cutting'],
+        'risk_level': 'high'
+    },
+    'thermal_injury': {
+        'description': 'Potential thermal injury to surrounding structures',
+        'associated_phases': ['gallbladder_dissection', 'calot_triangle_dissection'],
+        'risk_level': 'medium'
+    },
+    'traction_injury': {
+        'description': 'Excessive traction causing avulsion of structures',
+        'associated_phases': ['gallbladder_dissection', 'calot_triangle_dissection'],
+        'risk_level': 'medium'
+    },
+    'poor_exposure': {
+        'description': 'Inadequate exposure of surgical field',
+        'associated_phases': ['calot_triangle_dissection', 'gallbladder_dissection'],
+        'risk_level': 'medium'
+    },
+    'critical_view': {
+        'description': 'Failure to achieve critical view of safety',
+        'associated_phases': ['calot_triangle_dissection'],
+        'risk_level': 'high'
+    }
+}
 
 class MultiModalFusion(nn.Module):
     """
-    Multi-modal fusion module for combining visual features with tool detection results.
+    Multi-modal fusion module for combining visual and tool features.
     """
-    def __init__(self, visual_dim, tool_dim, output_dim, dropout=0.2):
+    def __init__(self, visual_dim=768, tool_dim=128, output_dim=256, dropout=0.3):
         """
-        Initialize fusion module.
+        Initialize multi-modal fusion module.
         
         Args:
             visual_dim: Dimension of visual features
-            tool_dim: Dimension of tool detection features
+            tool_dim: Dimension of tool features
             output_dim: Output dimension
             dropout: Dropout rate
         """
         super().__init__()
         
+        # Projection layers
         self.visual_projection = nn.Linear(visual_dim, output_dim)
         self.tool_projection = nn.Linear(tool_dim, output_dim)
         
-        # Attention for modality fusion
-        self.attention = nn.Sequential(
-            nn.Linear(output_dim * 2, output_dim),
-            nn.ReLU(),
-            nn.Linear(output_dim, 2),
-            nn.Softmax(dim=1)
-        )
+        # Cross-modal attention
+        self.cross_attention = CrossModalAttention(output_dim, output_dim, dropout)
         
         # Final fusion layer
-        self.fusion = nn.Sequential(
-            nn.Linear(output_dim, output_dim),
+        self.fusion_layer = nn.Sequential(
+            nn.Linear(output_dim * 2, output_dim),
             nn.LayerNorm(output_dim),
             nn.ReLU(),
             nn.Dropout(dropout)
@@ -66,336 +111,355 @@ class MultiModalFusion(nn.Module):
         
         Args:
             visual_features: Visual features [batch_size, visual_dim]
-            tool_features: Tool detection features [batch_size, tool_dim]
+            tool_features: Tool features [batch_size, tool_dim]
             
         Returns:
             Fused features [batch_size, output_dim]
         """
-        # Project features to common space
+        # Project features
         visual_proj = self.visual_projection(visual_features)
         tool_proj = self.tool_projection(tool_features)
         
-        # Calculate attention weights
-        concat_features = torch.cat([visual_proj, tool_proj], dim=1)
-        attention_weights = self.attention(concat_features)
+        # Apply cross-modal attention
+        visual_attended = self.cross_attention(visual_proj, tool_proj)
         
-        # Apply attention weights
-        fused = attention_weights[:, 0:1] * visual_proj + attention_weights[:, 1:2] * tool_proj
+        # Concatenate and fuse
+        concat_features = torch.cat([visual_attended, tool_proj], dim=1)
+        fused_features = self.fusion_layer(concat_features)
         
-        # Apply fusion layer
-        output = self.fusion(fused)
-        
-        return output
+        return fused_features
 
-
-class TemporalContextProcessor(nn.Module):
+class CrossModalAttention(nn.Module):
     """
-    Temporal context processor using GRU for sequential information.
+    Cross-modal attention module for attending from one modality to another.
     """
-    def __init__(self, input_dim, hidden_dim=256, num_layers=2, dropout=0.2):
+    def __init__(self, query_dim, key_dim, dropout=0.1):
         """
-        Initialize temporal context processor.
+        Initialize cross-modal attention module.
         
         Args:
-            input_dim: Input feature dimension
-            hidden_dim: Hidden state dimension
-            num_layers: Number of GRU layers
+            query_dim: Query dimension
+            key_dim: Key dimension
             dropout: Dropout rate
         """
         super().__init__()
         
-        self.gru = nn.GRU(
+        self.scale = query_dim ** 0.5
+        
+        # Attention layers
+        self.query_proj = nn.Linear(query_dim, query_dim)
+        self.key_proj = nn.Linear(key_dim, query_dim)
+        self.value_proj = nn.Linear(key_dim, query_dim)
+        
+        self.dropout = nn.Dropout(dropout)
+        
+        # Output projection
+        self.output_proj = nn.Linear(query_dim, query_dim)
+    
+    def forward(self, query, key_value):
+        """
+        Forward pass for cross-modal attention.
+        
+        Args:
+            query: Query tensor [batch_size, query_dim]
+            key_value: Key-value tensor [batch_size, key_dim]
+            
+        Returns:
+            Attended features [batch_size, query_dim]
+        """
+        # Project query, key, and value
+        q = self.query_proj(query).unsqueeze(1)  # [batch_size, 1, query_dim]
+        k = self.key_proj(key_value).unsqueeze(1)  # [batch_size, 1, query_dim]
+        v = self.value_proj(key_value).unsqueeze(1)  # [batch_size, 1, query_dim]
+        
+        # Compute attention scores
+        scores = torch.matmul(q, k.transpose(-2, -1)) / self.scale  # [batch_size, 1, 1]
+        
+        # Apply softmax and dropout
+        attn = F.softmax(scores, dim=-1)
+        attn = self.dropout(attn)
+        
+        # Apply attention to values
+        attended = torch.matmul(attn, v).squeeze(1)  # [batch_size, query_dim]
+        
+        # Output projection
+        output = self.output_proj(attended)
+        
+        return output
+
+class TemporalContextProcessor(nn.Module):
+    """
+    Temporal context processor for capturing temporal dynamics.
+    """
+    def __init__(self, input_dim=256, hidden_dim=256, num_layers=2, dropout=0.3):
+        """
+        Initialize temporal context processor.
+        
+        Args:
+            input_dim: Input dimension
+            hidden_dim: Hidden dimension
+            num_layers: Number of LSTM layers
+            dropout: Dropout rate
+        """
+        super().__init__()
+        
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.output_dim = hidden_dim * 2  # For bidirectional LSTM
+        
+        # Bidirectional LSTM
+        self.lstm = nn.LSTM(
             input_size=input_dim,
             hidden_size=hidden_dim,
             num_layers=num_layers,
             batch_first=True,
-            dropout=dropout if num_layers > 1 else 0,
-            bidirectional=True
+            bidirectional=True,
+            dropout=dropout if num_layers > 1 else 0
         )
         
-        self.output_dim = hidden_dim * 2  # bidirectional
+        # Attention layer
+        self.attention = TemporalAttention(hidden_dim * 2, dropout)
     
     def forward(self, x, lengths=None):
         """
-        Process sequence with temporal context.
+        Forward pass for temporal context processing.
         
         Args:
-            x: Input sequence [batch_size, seq_len, input_dim]
-            lengths: Sequence lengths for packed sequence
+            x: Input features [batch_size, seq_len, input_dim]
+            lengths: Sequence lengths (optional)
             
         Returns:
-            Processed sequence with temporal context [batch_size, seq_len, output_dim]
+            Temporally processed features [batch_size, output_dim]
         """
+        # Process with LSTM
         if lengths is not None:
             # Pack sequence
             packed_x = nn.utils.rnn.pack_padded_sequence(
                 x, lengths.cpu(), batch_first=True, enforce_sorted=False
             )
             
-            # Process with GRU
-            packed_output, _ = self.gru(packed_x)
+            # Process with LSTM
+            packed_output, _ = self.lstm(packed_x)
             
             # Unpack sequence
             output, _ = nn.utils.rnn.pad_packed_sequence(packed_output, batch_first=True)
         else:
-            # Process with GRU directly
-            output, _ = self.gru(x)
+            output, _ = self.lstm(x)
         
-        return output
+        # Apply attention
+        attended_output, attention_weights = self.attention(output)
+        
+        return attended_output
+
+
+class TemporalAttention(nn.Module):
+    """
+    Temporal attention module for emphasizing important frames in a sequence.
+    """
+    
+    def __init__(self, feature_dim):
+        """
+        Initialize temporal attention module.
+        
+        Args:
+            feature_dim: Feature dimension
+        """
+        super().__init__()
+        
+        # Attention projection layers
+        self.query = nn.Linear(feature_dim, feature_dim)
+        self.key = nn.Linear(feature_dim, feature_dim)
+        self.value = nn.Linear(feature_dim, feature_dim)
+        self.scale = nn.Parameter(torch.sqrt(torch.tensor(feature_dim, dtype=torch.float32)))
+    
+    def forward(self, x):
+        """
+        Forward pass.
+        
+        Args:
+            x: Input tensor of shape [batch_size, seq_len, feature_dim]
+            
+        Returns:
+            Attended tensor of shape [batch_size, feature_dim]
+        """
+        # Project inputs to queries, keys, and values
+        queries = self.query(x)  # [batch_size, seq_len, feature_dim]
+        keys = self.key(x)  # [batch_size, seq_len, feature_dim]
+        values = self.value(x)  # [batch_size, seq_len, feature_dim]
+        
+        # Calculate attention scores
+        scores = torch.matmul(queries, keys.transpose(-2, -1)) / self.scale  # [batch_size, seq_len, seq_len]
+        
+        # Apply softmax to get attention weights
+        attention_weights = F.softmax(scores, dim=-1)  # [batch_size, seq_len, seq_len]
+        
+        # Apply attention to values
+        attended = torch.matmul(attention_weights, values)  # [batch_size, seq_len, feature_dim]
+        
+        # Pool across time dimension to get a single vector
+        # This gives us a representation that considers the entire sequence
+        attended = torch.mean(attended, dim=1)  # [batch_size, feature_dim]
+        
+        return attended
 
 
 class SurgicalMistakeDetector(nn.Module):
     """
-    Multi-modal model for detecting surgical mistakes with risk assessment.
+    Model for detecting surgical mistakes and assessing their risk level.
+    
+    This model combines visual features from video frames with tool detection information
+    to identify potential mistakes in laparoscopic surgery.
     """
-    def __init__(self, visual_dim=768, tool_dim=128, num_tools=10, hidden_dim=256, 
-                 num_classes=3, use_temporal=True, dropout=0.3):
+    
+    def __init__(self, 
+                 visual_dim=768, 
+                 tool_dim=128, 
+                 hidden_dim=256, 
+                 num_classes=3,  # No mistake, low risk, high risk
+                 use_temporal=True):
         """
-        Initialize surgical mistake detector.
+        Initialize mistake detection model.
         
         Args:
             visual_dim: Dimension of visual features
             tool_dim: Dimension of tool features
-            num_tools: Number of possible surgical tools
-            hidden_dim: Hidden dimension
-            num_classes: Number of mistake/risk classes
-            use_temporal: Whether to use temporal context
-            dropout: Dropout rate
+            hidden_dim: Dimension of hidden layers
+            num_classes: Number of mistake classes
+            use_temporal: Whether to use temporal attention
         """
         super().__init__()
         
+        # Feature dimensions
+        self.visual_dim = visual_dim
+        self.tool_dim = tool_dim
+        self.hidden_dim = hidden_dim
+        self.num_classes = num_classes
         self.use_temporal = use_temporal
         
-        # Tool embedding layer (one-hot tool vectors to dense embeddings)
-        self.tool_embedding = nn.Embedding(num_tools, tool_dim)
-        
-        # Multi-modal fusion
-        self.fusion = MultiModalFusion(
-            visual_dim=visual_dim,
-            tool_dim=tool_dim,
-            output_dim=hidden_dim,
-            dropout=dropout
+        # Visual feature extraction (using ViT features)
+        self.visual_encoder = nn.Sequential(
+            nn.Linear(visual_dim, hidden_dim),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim),
+            nn.Dropout(0.3)
         )
         
-        # Temporal context processor (if enabled)
-        if use_temporal:
-            self.temporal_processor = TemporalContextProcessor(
-                input_dim=hidden_dim,
-                hidden_dim=hidden_dim,
-                num_layers=2,
-                dropout=dropout
-            )
-            temporal_dim = self.temporal_processor.output_dim
-        else:
-            temporal_dim = hidden_dim
-        
-        # Mistake detection head
-        self.mistake_classifier = nn.Sequential(
-            nn.Linear(temporal_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
+        # Tool feature encoding
+        self.tool_encoder = nn.Sequential(
+            nn.Linear(tool_dim, hidden_dim // 2),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.LayerNorm(hidden_dim // 2),
+            nn.Dropout(0.2)
+        )
+        
+        # Combine visual and tool features
+        self.combined_dim = hidden_dim + hidden_dim // 2
+        
+        # Temporal attention if enabled
+        if use_temporal:
+            self.temporal_attention = TemporalAttention(self.combined_dim)
+        
+        # Classification head
+        self.classifier = nn.Sequential(
+            nn.Linear(self.combined_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.3),
             nn.Linear(hidden_dim, num_classes)
         )
         
-        # Risk assessment head
+        # Risk level regression
         self.risk_regressor = nn.Sequential(
-            nn.Linear(temporal_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
+            nn.Linear(self.combined_dim, hidden_dim),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.Dropout(0.3),
             nn.Linear(hidden_dim, 1),
-            nn.Sigmoid()  # Risk score between 0 and 1
+            nn.Sigmoid()  # Output between 0 and 1
         )
     
-    def forward(self, visual_features, tool_ids, lengths=None):
+    def forward(self, x, tool_features=None):
         """
-        Forward pass for mistake detection.
+        Forward pass.
         
         Args:
-            visual_features: Visual features [batch_size, seq_len, visual_dim]
-            tool_ids: Tool IDs [batch_size, seq_len]
-            lengths: Sequence lengths (optional)
+            x: Input video frames tensor of shape [batch_size, seq_len, channels, height, width]
+               or pre-extracted visual features of shape [batch_size, seq_len, visual_dim]
+            tool_features: Optional tool detection features of shape [batch_size, seq_len, tool_dim]
             
         Returns:
-            Dict containing mistake logits and risk scores
+            Tuple of (mistake_logits, risk_level)
+            - mistake_logits: Logits for mistake classification [batch_size, num_classes]
+            - risk_level: Risk level assessment [batch_size, 1]
         """
-        batch_size, seq_len = visual_features.size(0), visual_features.size(1)
+        batch_size, seq_len = x.shape[:2]
         
-        # Process each timestep
-        fused_features = []
-        for t in range(seq_len):
-            # Get features for current timestep
-            visual_t = visual_features[:, t]
-            tool_ids_t = tool_ids[:, t]
-            
-            # Get tool embeddings
-            tool_embeddings = self.tool_embedding(tool_ids_t)
-            
-            # Fuse features
-            fused_t = self.fusion(visual_t, tool_embeddings)
-            fused_features.append(fused_t)
+        # If input is raw video frames, extract features
+        # Otherwise, assume input is already pre-extracted features
+        if len(x.shape) > 3:  # Input is [batch_size, seq_len, channels, height, width]
+            # We'll use pre-extracted features in this implementation
+            # Placeholder for feature extraction from raw frames
+            # In a real implementation, this would use a CNN or ViT to extract features
+            raise NotImplementedError("Raw frame processing not implemented. Please provide pre-extracted features.")
         
-        # Stack features
-        fused_features = torch.stack(fused_features, dim=1)  # [batch_size, seq_len, hidden_dim]
+        # Process visual features
+        visual_features = self.visual_encoder(x)  # [batch_size, seq_len, hidden_dim]
         
-        # Apply temporal processing if enabled
-        if self.use_temporal:
-            features = self.temporal_processor(fused_features, lengths)
+        # Process tool features if provided
+        if tool_features is not None:
+            tool_encoded = self.tool_encoder(tool_features)  # [batch_size, seq_len, hidden_dim//2]
+            # Combine visual and tool features
+            combined_features = torch.cat([visual_features, tool_encoded], dim=-1)  # [batch_size, seq_len, combined_dim]
         else:
-            features = fused_features
+            # Use zero tensor for tool features if not provided
+            tool_encoded = torch.zeros(batch_size, seq_len, self.hidden_dim // 2, device=x.device)
+            combined_features = torch.cat([visual_features, tool_encoded], dim=-1)
         
-        # Detect mistakes and assess risk
-        mistake_logits = self.mistake_classifier(features)
-        risk_scores = self.risk_regressor(features)
+        # Apply temporal attention if enabled
+        if self.use_temporal:
+            features = self.temporal_attention(combined_features)  # [batch_size, combined_dim]
+        else:
+            # Use mean pooling across time dimension
+            features = torch.mean(combined_features, dim=1)  # [batch_size, combined_dim]
         
-        return {
-            'mistake_logits': mistake_logits,
-            'risk_scores': risk_scores
-        }
+        # Predict mistake class
+        mistake_logits = self.classifier(features)  # [batch_size, num_classes]
+        
+        # Predict risk level
+        risk_level = self.risk_regressor(features)  # [batch_size, 1]
+        
+        return mistake_logits, risk_level
     
-    def load(self, checkpoint_path):
+    def predict(self, x, tool_features=None):
         """
-        Load model weights from checkpoint.
+        Run prediction on input.
         
         Args:
-            checkpoint_path: Path to model checkpoint
-        """
-        if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}")
-        
-        # Load weights
-        state_dict = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)
-        self.load_state_dict(state_dict)
-        logger.info(f"Loaded weights from {checkpoint_path}")
-        
-        return self
-    
-    def predict(self, visual_features, tool_detections, threshold=0.5):
-        """
-        Make predictions with the model.
-        
-        Args:
-            visual_features: Visual features [batch_size, seq_len, channels, height, width]
-            tool_detections: Tool detection results
-            threshold: Confidence threshold for mistake detection
+            x: Input video frames or features
+            tool_features: Optional tool detection features
             
         Returns:
             Dict with prediction results
         """
-        # Ensure model is in evaluation mode
         self.eval()
-        
         with torch.no_grad():
-            batch_size, seq_len = visual_features.size(0), visual_features.size(1)
+            mistake_logits, risk_level = self.forward(x, tool_features)
             
-            # Extract visual features (assuming they're already processed)
-            visual_features_flat = visual_features.reshape(batch_size, seq_len, -1)
-            
-            # Convert tool detections to tool IDs
-            tool_ids = torch.zeros((batch_size, seq_len), dtype=torch.long, device=visual_features.device)
-            
-            # Fill in detected tools (assuming highest confidence tool)
-            for b in range(batch_size):
-                for t in range(seq_len):
-                    if 'labels' in tool_detections and len(tool_detections['labels'][b]) > 0:
-                        # Get highest confidence tool
-                        max_idx = torch.argmax(tool_detections['scores'][b])
-                        tool_ids[b, t] = tool_detections['labels'][b][max_idx]
-            
-            # Forward pass
-            outputs = self.forward(visual_features_flat, tool_ids)
-            
-            # Get predictions
-            mistake_logits = outputs['mistake_logits']
-            risk_scores = outputs['risk_scores']
-            
-            # Get mistake indices and probabilities
+            # Convert logits to probabilities
             mistake_probs = F.softmax(mistake_logits, dim=-1)
-            mistake_indices = torch.argmax(mistake_probs, dim=-1)
             
-            # Convert to numpy arrays
-            mistake_indices_np = mistake_indices.cpu().numpy()
-            mistake_probs_np = mistake_probs.cpu().numpy()
-            risk_scores_np = risk_scores.cpu().numpy()
+            # Get predicted classes
+            mistake_class = torch.argmax(mistake_probs, dim=-1)
             
-            # Create mapping from indices to mistake names
-            mistake_names = ['no_mistake', 'minor_mistake', 'critical_mistake']
-            
-            # Create mapping from risk score to description
-            def risk_to_description(risk):
-                if risk < 0.3:
-                    return 'Low Risk'
-                elif risk < 0.7:
-                    return 'Medium Risk'
-                else:
-                    return 'High Risk'
-            
-            # Create results dictionary
-            results = {
-                'mistake_indices': mistake_indices_np,
-                'mistake_probabilities': mistake_probs_np,
-                'mistake_names': [mistake_names[idx] for idx in mistake_indices_np.flatten()],
-                'risk_levels': risk_scores_np.flatten(),
-                'risk_descriptions': [risk_to_description(risk) for risk in risk_scores_np.flatten()]
+            return {
+                'mistake_class': mistake_class,
+                'mistake_probs': mistake_probs,
+                'risk_level': risk_level
             }
-            
-            return results
-    
-    def explain_prediction(self, mistake_idx, risk_level):
-        """
-        Generate explanation for a prediction.
-        
-        Args:
-            mistake_idx: Mistake index
-            risk_level: Risk level score
-            
-        Returns:
-            Explanation string
-        """
-        # Mapping from mistake index to explanation template
-        explanation_templates = {
-            0: "No mistakes detected in the current action.",
-            1: "Minor mistake detected: {0}. This is generally recoverable.",
-            2: "Critical mistake detected: {0}. Immediate correction is recommended."
-        }
-        
-        # Specific details based on risk level
-        risk_details = {
-            0: [  # No mistake
-                "Procedure is following standard protocol.",
-                "All actions appear correct based on the current phase.",
-                "Tool usage is appropriate for this stage."
-            ],
-            1: [  # Minor mistake
-                "Instrument positioning could be improved.",
-                "Excessive force may be applied.",
-                "Slight deviation from optimal tissue handling.",
-                "Inefficient tool movement detected."
-            ],
-            2: [  # Critical mistake
-                "Possible anatomical structure at risk.",
-                "Inappropriate tool selection for this step.",
-                "Potential risk of tissue damage.",
-                "Critical structure is being approached unsafely."
-            ]
-        }
-        
-        # Select specific detail based on risk level
-        import random
-        detail_idx = int(risk_level * len(risk_details[mistake_idx]))
-        detail_idx = min(detail_idx, len(risk_details[mistake_idx]) - 1)
-        detail = risk_details[mistake_idx][detail_idx]
-        
-        # Generate explanation
-        explanation = explanation_templates[mistake_idx].format(detail)
-        
-        return explanation
 
 
 class GPTSurgicalAssistant(nn.Module):
     """
-    GPT-based model for context-aware guidance and surgical procedure assistance.
+    GPT-based model for generating surgical guidance during laparoscopic cholecystectomy.
     """
     def __init__(self, model_name='gpt2', num_visual_tokens=50, num_tool_tokens=20,
                  max_sequence_length=512, device=None):
@@ -755,3 +819,22 @@ class GPTSurgicalAssistant(nn.Module):
         }
         
         return response
+
+
+def get_mistake_detector_model(config):
+    """
+    Factory function to create a mistake detection model from config.
+    
+    Args:
+        config: Model configuration dictionary
+        
+    Returns:
+        Initialized mistake detection model
+    """
+    return SurgicalMistakeDetector(
+        visual_dim=config.get('visual_dim', 768),
+        tool_dim=config.get('tool_dim', 128),
+        hidden_dim=config.get('hidden_dim', 256),
+        num_classes=config.get('num_classes', 3),
+        use_temporal=config.get('use_temporal', True)
+    )

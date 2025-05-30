@@ -20,32 +20,75 @@ var/
 .installed.cfg
 *.egg
 
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# PyCharm
-.idea/
+# Project specific
+training/checkpoints/
+training/logs/
+*.pt
+*.pth
+*.onnx
+*.pb
+*.trt
 
-# VS Code
-.vscode/
+# Data - Exclude all data directories and files
+data/
+!data/README.md
 
-# Training data and models
-models/weights/**/*.pth
-data/videos/*.mp4
-data/videos/*.ts
-data/train/*.jpg
-data/train/*.png
-data/train_processed/*.jpg
-data/train_processed/*.png
-data/phases/*.jpg
-data/phases/*.png
+# Training archives
+surgical_ai_training.zip
 
-# Allow empty directories with .gitkeep
-!**/.gitkeep
-!models/weights/tool_detection/.gitkeep
-!models/weights/vit_lstm/.gitkeep
-!models/weights/mistake_detector/.gitkeep
-
-# Logs
+# Generated files
+results/
 logs/
 *.log
+wandb/
+
+# Large media files
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.flv
+*.webm
+*.png
+*.jpg
+*.jpeg
+*.gif
+!docs/images/*.png
+!docs/images/*.jpg
+
+# Weights & Biases
+wandb/
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST

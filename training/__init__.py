@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:bb661b544fc411b968822b52b23bea5fe1b74ae8e6b4a65bc422e42848daab46
-size 152
+"""
+SurgicalAI training module.
+
+This module contains all the training pipelines for the SurgicalAI system.
+"""
+
+from training.surgical_datasets import (
+    PhaseRecognitionDataset, 
+    ToolDetectionDataset, 
+    MistakeDetectionDataset, 
+    get_dataloader
+)
+
+from training.phase_recognition_trainer import PhaseRecognitionTrainer
+from training.tool_detection_trainer import ToolDetectionTrainer
+from training.mistake_detection_trainer import MistakeDetectionTrainer
+from training.train import main as train_main 

@@ -13,17 +13,37 @@ import logging
 from typing import List, Dict, Tuple, Optional, Union, Any
 import math
 import os
+import torchvision.models as models
+from timm.models.vision_transformer import VisionTransformer
+import timm
+from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
 logger = logging.getLogger(__name__)
 
-# Try importing timm for ViT models
+# Handle potential import errors with timm
 try:
     import timm
+    from timm.models.vision_transformer import VisionTransformer
     TIMM_AVAILABLE = True
+    logger.info("timm package is available. Using Vision Transformer models.")
 except ImportError:
-    logger.warning("timm package not installed. Using PyTorch's built-in Vision Transformer implementation.")
     TIMM_AVAILABLE = False
+    logger.warning("timm package not found. Vision Transformer models will not be available.")
+    # Create a placeholder class to avoid errors
+    class VisionTransformer:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("timm package not found. Cannot create Vision Transformer models.")
 
+# Mapping of surgical phases
+PHASE_MAPPING = {
+    0: 'preparation',
+    1: 'calot_triangle_dissection',
+    2: 'clipping_and_cutting',
+    3: 'gallbladder_dissection',
+    4: 'gallbladder_packaging',
+    5: 'cleaning_and_coagulation',
+    6: 'gallbladder_extraction'
+}
 
 class PositionalEncoding(nn.Module):
     """
@@ -60,35 +80,50 @@ class PositionalEncoding(nn.Module):
 
 class TemporalAttention(nn.Module):
     """
-    Temporal attention mechanism for focusing on important frames.
+    Temporal attention module for emphasizing important frames in a sequence.
     """
-    def __init__(self, hidden_dim):
-        super().__init__()
+    
+    def __init__(self, hidden_size):
+        """
+        Initialize temporal attention module.
         
-        self.attention = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.Tanh(),
-            nn.Linear(hidden_dim // 2, 1),
-            nn.Softmax(dim=1)
-        )
+        Args:
+            hidden_size: Size of the hidden state
+        """
+        super().__init__()
+        self.hidden_size = hidden_size
+        
+        # Attention layers
+        self.attention_query = nn.Linear(hidden_size, hidden_size)
+        self.attention_key = nn.Linear(hidden_size, hidden_size)
+        self.attention_value = nn.Linear(hidden_size, hidden_size)
+        self.attention_scale = nn.Parameter(torch.sqrt(torch.tensor(hidden_size, dtype=torch.float32)))
     
     def forward(self, x):
         """
-        Apply temporal attention.
+        Forward pass.
         
         Args:
-            x: Input sequence [batch_size, seq_len, hidden_dim]
-        
+            x: Input tensor of shape [batch_size, seq_len, hidden_size]
+            
         Returns:
-            Attended sequence [batch_size, hidden_dim]
+            Attended tensor of same shape
         """
-        # Calculate attention weights
-        attention_weights = self.attention(x)  # [batch_size, seq_len, 1]
+        # Project to query, key, value
+        query = self.attention_query(x)  # [batch_size, seq_len, hidden_size]
+        key = self.attention_key(x)  # [batch_size, seq_len, hidden_size]
+        value = self.attention_value(x)  # [batch_size, seq_len, hidden_size]
         
-        # Apply attention weights
-        context = torch.sum(attention_weights * x, dim=1)  # [batch_size, hidden_dim]
+        # Calculate attention scores
+        scores = torch.matmul(query, key.transpose(-2, -1)) / self.attention_scale  # [batch_size, seq_len, seq_len]
         
-        return context, attention_weights
+        # Apply softmax to get attention weights
+        attention_weights = F.softmax(scores, dim=-1)  # [batch_size, seq_len, seq_len]
+        
+        # Apply attention to values
+        attended = torch.matmul(attention_weights, value)  # [batch_size, seq_len, hidden_size]
+        
+        return attended
 
 
 class ViTFeatureExtractor(nn.Module):
@@ -146,263 +181,138 @@ class ViTFeatureExtractor(nn.Module):
 
 class ViTLSTM(nn.Module):
     """
-    Vision Transformer + LSTM model for surgical phase recognition.
+    ViT-LSTM model for surgical phase recognition.
     
-    Combines ViT for spatial feature extraction with LSTM for temporal modeling.
+    This model combines a Vision Transformer for frame-level feature extraction
+    with an LSTM for temporal modeling across video frames.
     """
-    def __init__(self, num_classes=7, vit_model='vit_base_patch16_224', hidden_size=512, 
-                 num_layers=2, dropout=0.3, pretrained=True, bidirectional=True, 
-                 freeze_vit=False, use_temporal_attention=True):
+    
+    def __init__(self, 
+                 num_classes=7, 
+                 vit_model='vit_base_patch16_224',
+                 hidden_size=512, 
+                 num_layers=2, 
+                 dropout=0.3, 
+                 use_temporal_attention=True, 
+                 pretrained=True):
         """
         Initialize ViT-LSTM model.
         
         Args:
-            num_classes: Number of surgical phases to recognize
-            vit_model: ViT model name or configuration
-            hidden_size: LSTM hidden dimension
+            num_classes: Number of phase classes
+            vit_model: Name of the ViT model to use
+            hidden_size: LSTM hidden state size
             num_layers: Number of LSTM layers
             dropout: Dropout rate
+            use_temporal_attention: Whether to use temporal attention
             pretrained: Whether to use pretrained ViT weights
-            bidirectional: Whether to use bidirectional LSTM
-            freeze_vit: Whether to freeze ViT parameters
-            use_temporal_attention: Whether to use temporal attention mechanism
         """
         super().__init__()
         
-        # Initialize ViT feature extractor
-        self.feature_extractor = ViTFeatureExtractor(
-            model_name=vit_model,
-            pretrained=pretrained,
-            freeze=freeze_vit
-        )
+        # Initialize ViT model with error handling
+        try:
+            if TIMM_AVAILABLE:
+                self.vit = timm.create_model(vit_model, pretrained=pretrained)
+                # Get ViT feature dimension
+                vit_feat_dim = self.vit.head.in_features
+                self.vit.head = nn.Identity()  # Remove classification head
+            else:
+                # Fallback to a basic CNN if timm is not available
+                logger.warning("Using ResNet18 as fallback for ViT")
+                resnet = models.resnet18(pretrained=False)
+                # Remove classification layer
+                self.vit = nn.Sequential(*list(resnet.children())[:-1])
+                vit_feat_dim = 512  # ResNet18 feature dimension
+        except Exception as e:
+            logger.warning(f"Error loading pretrained ViT model: {str(e)}")
+            logger.warning("Using ResNet18 as fallback for ViT")
+            resnet = models.resnet18(pretrained=False)
+            # Remove classification layer
+            self.vit = nn.Sequential(*list(resnet.children())[:-1])
+            vit_feat_dim = 512  # ResNet18 feature dimension
         
-        # Get feature dimension from extractor
-        feature_dim = self.feature_extractor.feature_dim
+        # Project ViT features to LSTM input size
+        self.projection = nn.Linear(vit_feat_dim, hidden_size)
         
         # LSTM for temporal modeling
         self.lstm = nn.LSTM(
-            input_size=feature_dim,
+            input_size=hidden_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True,
             dropout=dropout if num_layers > 1 else 0,
-            bidirectional=bidirectional
+            bidirectional=True
         )
         
-        # Define output dimension based on LSTM configuration
-        lstm_output_dim = hidden_size * 2 if bidirectional else hidden_size
-        
-        # Temporal attention module
+        # Temporal attention if enabled
         self.use_temporal_attention = use_temporal_attention
         if use_temporal_attention:
-            self.temporal_attention = TemporalAttention(lstm_output_dim)
+            self.temporal_attention = TemporalAttention(hidden_size * 2)  # *2 for bidirectional
         
-        # Classification head
-        self.classifier = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Linear(lstm_output_dim, num_classes)
-        )
+        # Classification layer
+        self.classifier = nn.Linear(hidden_size * 2, num_classes)  # *2 for bidirectional
         
-        # Initialize weights
-        self._init_weights()
+        # Dropout
+        self.dropout = nn.Dropout(dropout)
     
-    def _init_weights(self):
-        """Initialize LSTM and linear layer weights."""
-        for name, param in self.lstm.named_parameters():
-            if 'weight_ih' in name:
-                nn.init.xavier_uniform_(param.data)
-            elif 'weight_hh' in name:
-                nn.init.orthogonal_(param.data)
-            elif 'bias' in name:
-                param.data.fill_(0)
-        
-        for name, param in self.classifier.named_parameters():
-            if 'weight' in name:
-                nn.init.xavier_uniform_(param.data)
-            elif 'bias' in name:
-                param.data.fill_(0)
-    
-    def forward(self, x, lengths=None):
+    def forward(self, x):
         """
-        Forward pass for phase recognition.
+        Forward pass.
         
         Args:
-            x: Input image sequence [batch_size, seq_len, channels, height, width]
-            lengths: Sequence lengths for packed sequence
+            x: Input tensor of shape [batch_size, seq_len, channels, height, width]
             
         Returns:
-            Phase logits for each frame [batch_size, seq_len, num_classes]
+            Tuple of (logits, features)
+            - logits: Class logits of shape [batch_size, seq_len, num_classes]
+            - features: Final features of shape [batch_size, seq_len, hidden_size*2]
         """
-        batch_size, seq_len = x.size(0), x.size(1)
+        batch_size, seq_len = x.shape[:2]
         
-        # Process each frame with ViT
-        frame_features = []
-        for t in range(seq_len):
-            # Extract features from frame at time t
-            features_t = self.feature_extractor(x[:, t])
-            frame_features.append(features_t)
+        # Reshape input for feature extraction
+        x_reshaped = x.view(batch_size * seq_len, *x.shape[2:])  # [batch_size*seq_len, channels, height, width]
         
-        # Stack frame features
-        frame_features = torch.stack(frame_features, dim=1)  # [batch_size, seq_len, feature_dim]
+        # Extract features with ViT or ResNet
+        if isinstance(self.vit, nn.Sequential):  # ResNet fallback
+            vit_features = self.vit(x_reshaped)
+            vit_features = vit_features.view(batch_size * seq_len, -1)  # Flatten features
+        else:  # Original ViT
+            vit_features = self.vit(x_reshaped)  # [batch_size*seq_len, vit_feat_dim]
         
-        # Process with LSTM (with packed sequence if lengths are provided)
-        if lengths is not None:
-            # Pack sequence
-            packed_features = nn.utils.rnn.pack_padded_sequence(
-                frame_features, lengths.cpu(), batch_first=True, enforce_sorted=False
-            )
-            
-            # Process with LSTM
-            packed_outputs, _ = self.lstm(packed_features)
-            
-            # Unpack sequence
-            lstm_out, _ = nn.utils.rnn.pad_packed_sequence(packed_outputs, batch_first=True)
-        else:
-            # Process with LSTM directly
-            lstm_out, _ = self.lstm(frame_features)
+        # Project features
+        projected_features = self.projection(vit_features)  # [batch_size*seq_len, hidden_size]
+        
+        # Reshape back to sequence
+        sequence_features = projected_features.view(batch_size, seq_len, -1)  # [batch_size, seq_len, hidden_size]
+        
+        # Apply LSTM
+        lstm_output, _ = self.lstm(sequence_features)  # [batch_size, seq_len, hidden_size*2]
         
         # Apply temporal attention if enabled
         if self.use_temporal_attention:
-            context, _ = self.temporal_attention(lstm_out)
-            # Repeat context for each time step
-            output = self.classifier(context).unsqueeze(1).repeat(1, seq_len, 1)
-        else:
-            # Classify each time step independently
-            output = self.classifier(lstm_out)
+            lstm_output = self.temporal_attention(lstm_output)
         
-        return output
+        # Apply dropout
+        lstm_output = self.dropout(lstm_output)
+        
+        # Apply classifier
+        logits = self.classifier(lstm_output)  # [batch_size, seq_len, num_classes]
+        
+        return logits, lstm_output
     
-    def load(self, checkpoint_path):
+    def extract_features(self, x):
         """
-        Load model weights from checkpoint.
+        Extract features without classification.
         
         Args:
-            checkpoint_path: Path to model checkpoint
-        """
-        if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}")
-        
-        # Load weights
-        state_dict = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)
-        self.load_state_dict(state_dict)
-        logger.info(f"Loaded weights from {checkpoint_path}")
-        
-        return self
-        
-    def predict(self, sequences, smooth=True, window_size=5):
-        """
-        Predict surgical phases from video sequences.
-        
-        Args:
-            sequences: Video sequences [batch_size, seq_len, channels, height, width]
-            smooth: Whether to apply temporal smoothing to predictions
-            window_size: Window size for temporal smoothing
+            x: Input tensor of shape [batch_size, seq_len, channels, height, width]
             
         Returns:
-            Dict with prediction results
+            Features of shape [batch_size, seq_len, hidden_size*2]
         """
-        # Ensure model is in evaluation mode
-        self.eval()
-        
-        with torch.no_grad():
-            batch_size, seq_len = sequences.size(0), sequences.size(1)
-            
-            # Process each frame
-            all_outputs = []
-            
-            for t in range(seq_len):
-                # Extract features from frame at time t
-                features_t = self.feature_extractor(sequences[:, t])
-                all_outputs.append(features_t)
-            
-            # Stack frame features
-            frame_features = torch.stack(all_outputs, dim=1)  # [batch_size, seq_len, feature_dim]
-            
-            # Create sequence lengths tensor
-            sequence_lengths = torch.full((batch_size,), seq_len, dtype=torch.long, device=sequences.device)
-            
-            # Forward pass through LSTM
-            if self.bidirectional:
-                # Use packed sequence if lengths are provided
-                packed_features = nn.utils.rnn.pack_padded_sequence(
-                    frame_features, sequence_lengths.cpu(), batch_first=True, enforce_sorted=False
-                )
-                
-                # Process with LSTM
-                packed_output, _ = self.lstm(packed_features)
-                
-                # Unpack sequence
-                lstm_output, _ = nn.utils.rnn.pad_packed_sequence(packed_output, batch_first=True)
-            else:
-                # Process with LSTM directly
-                lstm_output, _ = self.lstm(frame_features)
-            
-            # Apply temporal attention if enabled
-            if self.use_temporal_attention:
-                # Apply attention for each timestep in the sequence
-                attended_outputs = []
-                
-                for t in range(seq_len):
-                    # Get sequence up to time t (inclusive)
-                    sequence_t = lstm_output[:, :t+1]
-                    
-                    # Apply attention
-                    context_t, _ = self.temporal_attention(sequence_t)
-                    
-                    # Classify the context
-                    output_t = self.classifier(context_t)
-                    
-                    attended_outputs.append(output_t)
-                
-                # Stack outputs
-                logits = torch.stack(attended_outputs, dim=1)  # [batch_size, seq_len, num_classes]
-            else:
-                # Apply classifier to each timestep
-                logits = self.classifier(lstm_output)  # [batch_size, seq_len, num_classes]
-            
-            # Apply temporal smoothing if enabled
-            if smooth and seq_len > 1:
-                smoothed_logits = []
-                
-                for t in range(seq_len):
-                    # Define window start and end
-                    start = max(0, t - window_size // 2)
-                    end = min(seq_len, t + window_size // 2 + 1)
-                    
-                    # Average logits in window
-                    window_logits = logits[:, start:end].mean(dim=1)
-                    smoothed_logits.append(window_logits)
-                
-                # Stack smoothed logits
-                logits = torch.stack(smoothed_logits, dim=1)
-            
-            # Get probabilities and predicted classes
-            probs = F.softmax(logits, dim=-1)
-            predictions = torch.argmax(probs, dim=-1)
-            
-            # Convert to numpy arrays
-            probs_np = probs.cpu().numpy()
-            predictions_np = predictions.cpu().numpy()
-            
-            # Create mapping from indices to phase names
-            phase_names = [
-                'preparation',
-                'calot_triangle_dissection',
-                'clipping_and_cutting',
-                'gallbladder_dissection',
-                'gallbladder_packaging',
-                'cleaning_and_coagulation',
-                'gallbladder_extraction'
-            ]
-            
-            # Create results dictionary
-            results = {
-                'phase_indices': predictions_np,
-                'probabilities': probs_np,
-                'phase_names': [[phase_names[idx] for idx in pred] for pred in predictions_np]
-            }
-            
-            return results
+        # Forward pass without classification
+        _, features = self.forward(x)
+        return features
 
 
 class ViTTransformerTemporal(nn.Module):
@@ -517,3 +427,24 @@ class ViTTransformerTemporal(nn.Module):
         """
         self.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
         logger.info(f"Loaded weights from {checkpoint_path}")
+
+
+def get_vit_lstm_model(config):
+    """
+    Factory function to create a ViT-LSTM model from config.
+    
+    Args:
+        config: Model configuration dictionary
+        
+    Returns:
+        Initialized ViT-LSTM model
+    """
+    return ViTLSTM(
+        num_classes=config.get('num_classes', 7),
+        vit_model=config.get('vit_model', 'vit_base_patch16_224'),
+        hidden_size=config.get('hidden_size', 512),
+        num_layers=config.get('num_layers', 2),
+        dropout=config.get('dropout', 0.3),
+        use_temporal_attention=config.get('use_temporal_attention', True),
+        pretrained=config.get('pretrained', True)
+    )

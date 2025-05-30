@@ -1,5 +1,6 @@
+#!/usr/bin/env python
 """
-Setup script for SurgicalAI package.
+Setup script for the SurgicalAI package.
 """
 
 from setuptools import setup, find_packages
@@ -7,47 +8,36 @@ from setuptools import setup, find_packages
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
+with open("requirements.txt", "r", encoding="utf-8") as fh:
+    requirements = fh.read().splitlines()
+
 setup(
-    name="surgicalai",
-    version="0.1.0",
+    name="SurgicalAI",
+    version="1.0.0",
     author="SurgicalAI Team",
-    author_email="contact@surgicalai.example.com",
-    description="Advanced computer vision system for surgical tool detection",
+    author_email="your.email@example.com",
+    description="A personalized guidance system for laparoscopic cholecystectomy",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/username/SurgicalAI",
+    url="https://github.com/yourusername/SurgicalAI",
     packages=find_packages(),
     classifiers=[
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
+        "Topic :: Scientific/Engineering :: Medical Science Apps.",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
     python_requires=">=3.8",
-    install_requires=[
-        "torch>=2.0.0",
-        "torchvision>=0.15.0",
-        "numpy>=1.24.0",
-        "Pillow>=10.0.0",
-        "matplotlib>=3.7.0",
-        "seaborn>=0.12.0",
-        "tqdm>=4.65.0",
-        "opencv-python>=4.8.0",
-        "PyYAML>=6.0",
-        "pycocotools>=2.0.6",
-        "albumentations>=1.3.0",
-        "pandas>=2.0.0",
-        "optuna>=3.2.0",
-        "scikit-learn>=1.3.0",
-        "tensorboard>=2.13.0",
-        "plotly>=5.15.0",
-        "flask>=2.0.1",
-        "timm>=0.5.4",
-        "transformers>=4.8.2",
-    ],
+    install_requires=requirements,
     entry_points={
         "console_scripts": [
-            "surgicalai=app.main:main",
+            "surgicalai-train=scripts.train_models:main",
+            "surgicalai-inference=scripts.run_inference:main",
+            "surgicalai-setup=scripts.setup_profiles:main",
+            "surgicalai-init=scripts.initialize_system:main",
         ],
     },
 )

@@ -1,19 +1,18 @@
+#!/usr/bin/env python3
 """
-Prepare the SurgicalAI project for training on Google Colab.
+Prepare SurgicalAI for training on a GPU machine.
 
-This script:
-1. Creates necessary directory structure
-2. Validates annotations and data
-3. Prepares configuration files for Colab
-4. Performs a lightweight check of the data
+This script verifies the environment setup and data availability for training,
+preparing the system for training on a machine with an NVIDIA GPU.
 """
 
 import os
 import sys
-import json
-import shutil
 import argparse
 import logging
+import yaml
+import torch
+import shutil
 from pathlib import Path
 
 # Add project root to path
@@ -22,573 +21,240 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 )
-logger = logging.getLogger("PrepareForTraining")
+logger = logging.getLogger(__name__)
 
-def setup_directory_structure():
-    """Create necessary directories for training"""
-    directories = [
-        "data/annotations",
-        "data/train_processed",
-        "data/phases",
-        "data/mistakes",
-        "models/weights/tool_detection",
-        "models/weights/vit_lstm",
-        "models/weights/mistake_detector",
-        "colab_training"
-    ]
+def check_gpu():
+    """Check GPU availability and display information."""
+    logger.info("Checking GPU availability...")
     
-    for directory in directories:
-        os.makedirs(directory, exist_ok=True)
-        logger.info(f"Created directory: {directory}")
-
-def validate_coco_annotations():
-    """Validate and prepare COCO annotations for tool detection"""
-    coco_file = "data/train/_annotations.coco.json"
-    target_file = "data/annotations/tool_annotations.json"
-    
-    # Check if COCO annotations are valid
-    if os.path.exists(coco_file):
-        try:
-            with open(coco_file, 'r') as f:
-                first_line = f.readline().strip()
-                if first_line.startswith("version https://git-lfs.github.com"):
-                    logger.warning(f"COCO annotations file {coco_file} appears to be a Git LFS pointer, not actual data")
-                    logger.warning("You need to create or download actual COCO annotations")
-                    # Create a template file
-                    create_template_annotations()
-                else:
-                    # Try to copy the file
-                    shutil.copy(coco_file, target_file)
-                    logger.info(f"Copied annotations from {coco_file} to {target_file}")
-        except Exception as e:
-            logger.error(f"Error validating COCO annotations: {str(e)}")
-            create_template_annotations()
+    if torch.cuda.is_available():
+        gpu_count = torch.cuda.device_count()
+        logger.info(f"✅ CUDA is available! Found {gpu_count} GPU(s).")
+        
+        for i in range(gpu_count):
+            gpu_name = torch.cuda.get_device_name(i)
+            gpu_mem = torch.cuda.get_device_properties(i).total_memory / (1024**3)  # GB
+            logger.info(f"   GPU {i}: {gpu_name} ({gpu_mem:.1f} GB)")
+            
+        return True
     else:
-        logger.warning(f"COCO annotations file {coco_file} not found")
-        create_template_annotations()
+        logger.warning("❌ CUDA is not available. Training will be slow on CPU only.")
+        return False
 
-def create_template_annotations():
-    """Create template annotation files"""
-    # Tool detection annotations template
-    tool_annotations = {
-        "info": {"description": "SurgicalAI Tool Detection Dataset"},
-        "images": [],
-        "annotations": [],
-        "categories": [
-            {"id": 1, "name": "Grasper", "supercategory": "Tool"},
-            {"id": 2, "name": "Scissors", "supercategory": "Tool"},
-            {"id": 3, "name": "Clipper", "supercategory": "Tool"},
-            {"id": 4, "name": "Hook", "supercategory": "Tool"},
-            {"id": 5, "name": "Irrigator", "supercategory": "Tool"}
-        ]
-    }
+def check_datasets():
+    """Check if datasets are available in the expected locations."""
+    logger.info("Checking datasets availability...")
     
-    with open("data/annotations/tool_annotations.json", 'w') as f:
-        json.dump(tool_annotations, f, indent=2)
-    logger.info("Created template tool annotations file")
-    
-    # Phase annotations template
-    phase_annotations = {
-        "phases": {
-            "preparation": {"start_time": 0, "end_time": 120},
-            "calot_triangle_dissection": {"start_time": 120, "end_time": 600},
-            "clipping_and_cutting": {"start_time": 600, "end_time": 840},
-            "gallbladder_dissection": {"start_time": 840, "end_time": 1620},
-            "gallbladder_packaging": {"start_time": 1620, "end_time": 1800},
-            "cleaning_and_coagulation": {"start_time": 1800, "end_time": 2040},
-            "gallbladder_extraction": {"start_time": 2040, "end_time": 2220}
-        },
-        "video_files": {
-            "Laparoscopic Cholecystectomy High Definition Full Length Video.mp4": {
-                "duration": 2220,
-                "fps": 30,
-                "phases": {
-                    "preparation": [0, 120],
-                    "calot_triangle_dissection": [120, 600],
-                    "clipping_and_cutting": [600, 840],
-                    "gallbladder_dissection": [840, 1620],
-                    "gallbladder_packaging": [1620, 1800],
-                    "cleaning_and_coagulation": [1800, 2040],
-                    "gallbladder_extraction": [2040, 2220]
-                }
-            }
-        }
-    }
-    
-    with open("data/annotations/phase_annotations.json", 'w') as f:
-        json.dump(phase_annotations, f, indent=2)
-    logger.info("Created template phase annotations file")
-
-def copy_training_files():
-    """Copy training images to processed directory"""
-    train_dir = "data/train"
-    processed_dir = "data/train_processed"
-    
-    if os.path.exists(train_dir) and os.path.isdir(train_dir):
-        img_files = [f for f in os.listdir(train_dir) if f.endswith(('.jpg', '.jpeg', '.png'))]
-        if img_files:
-            for img_file in img_files:
-                src = os.path.join(train_dir, img_file)
-                dst = os.path.join(processed_dir, img_file)
-                shutil.copy(src, dst)
-            logger.info(f"Copied {len(img_files)} images to {processed_dir}")
-        else:
-            logger.warning(f"No image files found in {train_dir}")
-    else:
-        logger.warning(f"Training directory {train_dir} not found or not a directory")
-
-def create_colab_notebook():
-    """Create a comprehensive Colab notebook for training"""
-    notebook_content = {
-        "cells": [
-            {
-                "cell_type": "markdown",
-                "metadata": {},
-                "source": [
-                    "# SurgicalAI Training Notebook\n",
-                    "\n",
-                    "This notebook trains all components of the SurgicalAI system:\n",
-                    "1. Tool Detection\n",
-                    "2. Phase Recognition\n",
-                    "3. Mistake Detection\n",
-                    "\n",
-                    "Each section can be run independently."
-                ]
-            },
-            {
-                "cell_type": "code",
-                "execution_count": None,
-                "metadata": {},
-                "source": [
-                    "# Setup environment and mount Google Drive\n",
-                    "from google.colab import drive\n",
-                    "drive.mount('/content/drive')\n",
-                    "\n",
-                    "# Create a directory to store our weights\n",
-                    "!mkdir -p /content/drive/MyDrive/SurgicalAI/weights\n",
-                    "\n",
-                    "# Clone the repository\n",
-                    "!git clone https://github.com/YOUR_USERNAME/SurgicalAI\n",
-                    "%cd SurgicalAI\n",
-                    "\n",
-                    "# Install dependencies\n",
-                    "!pip install -r requirements.txt\n",
-                    "!pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118"
-                ]
-            },
-            {
-                "cell_type": "markdown",
-                "metadata": {},
-                "source": [
-                    "## Upload Training Data\n",
-                    "\n",
-                    "Upload your training data or copy from Drive if already uploaded."
-                ]
-            },
-            {
-                "cell_type": "code",
-                "execution_count": None,
-                "metadata": {},
-                "source": [
-                    "# Option 1: Upload data directly to this Colab session\n",
-                    "# from google.colab import files\n",
-                    "# uploaded = files.upload()  # Upload annotation files\n",
-                    "\n",
-                    "# Option 2: Copy from Google Drive if already uploaded\n",
-                    "!mkdir -p data/annotations\n",
-                    "!mkdir -p data/train_processed\n",
-                    "!mkdir -p data/phases\n",
-                    "\n",
-                    "# Copy your data from Drive (uncomment and modify paths as needed)\n",
-                    "# !cp /content/drive/MyDrive/SurgicalAI/data/annotations/* data/annotations/\n",
-                    "# !cp -r /content/drive/MyDrive/SurgicalAI/data/train_processed/* data/train_processed/\n",
-                    "# !cp -r /content/drive/MyDrive/SurgicalAI/data/phases/* data/phases/"
-                ]
-            },
-            {
-                "cell_type": "markdown",
-                "metadata": {},
-                "source": [
-                    "## 1. Tool Detection Training"
-                ]
-            },
-            {
-                "cell_type": "code",
-                "execution_count": None,
-                "metadata": {},
-                "source": [
-                    "# Train the tool detection model\n",
-                    "!python training/train_tool_detection.py \\\n",
-                    "  --data_dir data \\\n",
-                    "  --output_dir models/weights \\\n",
-                    "  --batch_size 4 \\\n",
-                    "  --num_epochs 20 \\\n",
-                    "  --learning_rate 3e-4 \\\n",
-                    "  --backbone resnet50 \\\n",
-                    "  --use_mixed_precision True\n",
-                    "\n",
-                    "# Save the trained model to Drive\n",
-                    "!cp models/weights/tool_detection/tool_detection.pth /content/drive/MyDrive/SurgicalAI/weights/"
-                ]
-            },
-            {
-                "cell_type": "markdown",
-                "metadata": {},
-                "source": [
-                    "## 2. Phase Recognition Training"
-                ]
-            },
-            {
-                "cell_type": "code",
-                "execution_count": None,
-                "metadata": {},
-                "source": [
-                    "# Train the phase recognition model\n",
-                    "!python training/train_phase_recognition.py \\\n",
-                    "  --data_dir data \\\n",
-                    "  --output_dir models/weights/vit_lstm \\\n",
-                    "  --batch_size 2 \\\n",
-                    "  --num_epochs 15 \\\n",
-                    "  --vit_model vit_base_patch16_224 \\\n",
-                    "  --freeze_vit True\n",
-                    "\n",
-                    "# Save the trained model to Drive\n",
-                    "!cp models/weights/vit_lstm/phase_recognition.pth /content/drive/MyDrive/SurgicalAI/weights/"
-                ]
-            },
-            {
-                "cell_type": "markdown",
-                "metadata": {},
-                "source": [
-                    "## 3. Mistake Detection Training"
-                ]
-            },
-            {
-                "cell_type": "code",
-                "execution_count": None,
-                "metadata": {},
-                "source": [
-                    "# Train the mistake detection model\n",
-                    "!python training/train_all_models.py \\\n",
-                    "  --train_subset mistake_detection \\\n",
-                    "  --data_dir data \\\n",
-                    "  --output_dir models/weights \\\n",
-                    "  --batch_size 4 \\\n",
-                    "  --num_epochs 10\n",
-                    "\n",
-                    "# Save the trained model to Drive\n",
-                    "!cp models/weights/mistake_detector/mistake_detection.pth /content/drive/MyDrive/SurgicalAI/weights/"
-                ]
-            },
-            {
-                "cell_type": "markdown",
-                "metadata": {},
-                "source": [
-                    "## Verify and Download Models\n",
-                    "\n",
-                    "Check that all models are trained and saved."
-                ]
-            },
-            {
-                "cell_type": "code",
-                "execution_count": None,
-                "metadata": {},
-                "source": [
-                    "# List saved models in Drive\n",
-                    "!ls -la /content/drive/MyDrive/SurgicalAI/weights/\n",
-                    "\n",
-                    "# Download models directly from Colab if needed\n",
-                    "from google.colab import files\n",
-                    "\n",
-                    "# Uncomment to download specific models\n",
-                    "# files.download('/content/drive/MyDrive/SurgicalAI/weights/tool_detection.pth')\n",
-                    "# files.download('/content/drive/MyDrive/SurgicalAI/weights/phase_recognition.pth')\n",
-                    "# files.download('/content/drive/MyDrive/SurgicalAI/weights/mistake_detection.pth')"
-                ]
-            }
-        ],
-        "metadata": {
-            "accelerator": "GPU",
-            "colab": {
-                "gpuType": "T4",
-                "provenance": []
-            },
-            "kernelspec": {
-                "display_name": "Python 3",
-                "name": "python3"
-            },
-            "language_info": {
-                "name": "python"
-            }
-        },
-        "nbformat": 4,
-        "nbformat_minor": 0
-    }
-    
-    with open("colab_training/SurgicalAI_Training.ipynb", 'w') as f:
-        json.dump(notebook_content, f, indent=2)
-    logger.info("Created Colab training notebook at colab_training/SurgicalAI_Training.ipynb")
-
-def create_model_loader_script():
-    """Create script to load trained models from Drive"""
-    content = '''
-# Script to load trained models from Google Drive to local project
-import os
-import sys
-import shutil
-import argparse
-import logging
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger("LoadTrainedModels")
-
-def load_models(source_dir, target_dir="models/weights"):
-    """Load trained models from source to project directories"""
-    if not os.path.exists(source_dir):
-        logger.error(f"Source directory {source_dir} does not exist")
+    # Load config to get dataset paths
+    config_path = Path("training/configs/training_config.yaml")
+    if not config_path.exists():
+        logger.error(f"❌ Configuration file not found: {config_path}")
         return False
     
-    # Define model mappings: source file -> target path
-    model_mappings = {
-        "tool_detection.pth": "tool_detection/tool_detection.pth",
-        "phase_recognition.pth": "vit_lstm/phase_recognition.pth",
-        "mistake_detection.pth": "mistake_detector/mistake_detection.pth"
-    }
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
     
-    success_count = 0
-    for src_file, target_path in model_mappings.items():
-        src_path = os.path.join(source_dir, src_file)
-        dst_path = os.path.join(target_dir, target_path)
-        
-        # Create target directory if it doesn't exist
-        os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-        
-        if os.path.exists(src_path):
-            try:
-                shutil.copy(src_path, dst_path)
-                logger.info(f"Copied {src_path} to {dst_path}")
-                success_count += 1
-            except Exception as e:
-                logger.error(f"Error copying {src_path} to {dst_path}: {str(e)}")
-        else:
-            logger.warning(f"Source file {src_path} does not exist")
+    # Check each dataset
+    datasets_ok = True
     
-    logger.info(f"Loaded {success_count}/{len(model_mappings)} models")
-    return success_count > 0
-
-def main():
-    parser = argparse.ArgumentParser(description="Load trained models from Google Drive")
-    parser.add_argument("--source_dir", type=str, required=True, 
-                        help="Directory containing trained models (e.g., downloads from Google Drive)")
-    parser.add_argument("--target_dir", type=str, default="models/weights",
-                        help="Target directory in the project (default: models/weights)")
+    # Cholec80 dataset
+    cholec_path = Path(config['phase_recognition']['data']['data_dir'])
+    if not cholec_path.exists():
+        logger.warning(f"❌ Cholec80 dataset not found at: {cholec_path}")
+        datasets_ok = False
+    else:
+        logger.info(f"✅ Found Cholec80 dataset at: {cholec_path}")
     
-    args = parser.parse_args()
+    # m2cai16-tool-locations dataset
+    tool_path = Path(config['tool_detection']['data']['data_dir'])
+    if not tool_path.exists():
+        logger.warning(f"❌ m2cai16-tool-locations dataset not found at: {tool_path}")
+        datasets_ok = False
+    else:
+        logger.info(f"✅ Found m2cai16-tool-locations dataset at: {tool_path}")
     
-    # Load the models
-    load_models(args.source_dir, args.target_dir)
-
-if __name__ == "__main__":
-    main()
-'''
+    # EndoScapes dataset
+    endo_path = Path(config['mistake_detection']['data']['data_dir'])
+    if not endo_path.exists():
+        logger.warning(f"❌ EndoScapes dataset not found at: {endo_path}")
+        datasets_ok = False
+    else:
+        logger.info(f"✅ Found EndoScapes dataset at: {endo_path}")
     
-    with open("scripts/load_trained_models.py", 'w') as f:
-        f.write(content)
-    logger.info("Created model loader script at scripts/load_trained_models.py")
-
-def update_readme():
-    """Update README with training instructions"""
-    readme_content = """# SurgicalAI Training Instructions
-
-## Project Structure
-The SurgicalAI project is set up with a structure that separates:
-- Model architecture (in `models/`)
-- Training code (in `training/`)
-- Data processing (in `data/`)
-- Application logic (in `app/`)
-
-## Training Workflow
-
-### 1. Prepare for Training
-Run the preparation script:
-```
-python scripts/prepare_for_training.py
-```
-
-This script creates the necessary directories and template files for training.
-
-### 2. Prepare Your Data
-
-#### Tool Detection
-- Place training images in `data/train_processed/`
-- Update tool annotations in `data/annotations/tool_annotations.json`
-
-#### Phase Recognition
-- Extract frames from videos to `data/phases/`
-- Update phase timestamps in `data/annotations/phase_annotations.json`
-
-#### Mistake Detection
-- Uses the existing `data/mistake_annotations.json` file
-- Update with real mistake data if available
-
-### 3. Train on Google Colab
-1. Upload the `colab_training/SurgicalAI_Training.ipynb` notebook to Google Colab
-2. Follow the instructions in the notebook to upload your data
-3. Run the training cells for each model type
-4. Save the trained models to Google Drive
-
-### 4. Use Trained Models Locally
-Download the trained models from Google Drive and load them:
-```
-python scripts/load_trained_models.py --source_dir path/to/downloaded/models
-```
-
-## GitHub Instructions
-When pushing to GitHub:
-1. Add `models/weights/*/` to your `.gitignore` file to avoid pushing large model files
-2. Include all code and configuration files
-3. Include small annotation files but exclude large datasets
-"""
+    # Supplementary data
+    suppl_path = Path(config['mistake_detection']['data']['supplementary_data_dir'])
+    if not suppl_path.exists():
+        logger.warning(f"❌ Supplementary dataset not found at: {suppl_path}")
+        datasets_ok = False
+    else:
+        logger.info(f"✅ Found supplementary dataset at: {suppl_path}")
     
-    with open("colab_training/README.md", 'w') as f:
-        f.write(readme_content)
-    logger.info("Created training README at colab_training/README.md")
+    return datasets_ok
 
-def create_gitignore():
-    """Create appropriate .gitignore file"""
-    gitignore_content = """# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# PyCharm
-.idea/
-
-# VS Code
-.vscode/
-
-# Training data and models
-models/weights/**/*.pth
-data/videos/*.mp4
-data/videos/*.ts
-data/train/*.jpg
-data/train/*.png
-data/train_processed/*.jpg
-data/train_processed/*.png
-data/phases/*.jpg
-data/phases/*.png
-
-# Allow empty directories with .gitkeep
-!**/.gitkeep
-!models/weights/tool_detection/.gitkeep
-!models/weights/vit_lstm/.gitkeep
-!models/weights/mistake_detector/.gitkeep
-
-# Logs
-logs/
-*.log
-"""
+def check_model_code():
+    """Verify that all necessary model code is present."""
+    logger.info("Checking model code files...")
     
-    with open(".gitignore", 'w') as f:
-        f.write(gitignore_content)
-    logger.info("Created .gitignore file")
-
-def create_gitkeep_files():
-    """Create .gitkeep files to maintain directory structure in Git"""
-    gitkeep_dirs = [
-        "models/weights/tool_detection",
-        "models/weights/vit_lstm",
-        "models/weights/mistake_detector",
-        "data/train_processed",
-        "data/phases",
-        "data/annotations"
+    required_files = [
+        "models/phase_recognition.py",
+        "models/tool_detection.py",
+        "models/mistake_detection.py",
+        "models/ensemble.py",
+        "training/phase_recognition_trainer.py",
+        "training/tool_detection_trainer.py",
+        "training/mistake_detection_trainer.py",
+        "training/surgical_datasets.py",
+        "training/train.py",
+        "training/configs/training_config.yaml"
     ]
     
-    for directory in gitkeep_dirs:
-        with open(os.path.join(directory, ".gitkeep"), 'w') as f:
-            pass
-        logger.info(f"Created .gitkeep in {directory}")
+    missing_files = []
+    for file_path in required_files:
+        if not os.path.exists(file_path):
+            missing_files.append(file_path)
+    
+    if missing_files:
+        logger.error("❌ The following required files are missing:")
+        for file in missing_files:
+            logger.error(f"   - {file}")
+        return False
+    
+    logger.info("✅ All required model code files are present.")
+    return True
 
-def check_data_integrity():
-    """Check if necessary data files exist"""
-    video_file = "data/videos/Laparoscopic Cholecystectomy High Definition Full Length Video.mp4"
+def create_training_script():
+    """Create a shell script to run the training."""
+    logger.info("Creating training shell script...")
     
-    if os.path.exists(video_file):
-        logger.info(f"Found main video file: {video_file}")
-    else:
-        logger.warning(f"Main video file not found: {video_file}")
-        logger.warning("Please ensure you have the required video files for training")
+    script_content = """#!/bin/bash
+# SurgicalAI Training Script
+# This script runs the SurgicalAI training pipeline
+
+# Activate virtual environment if needed
+# source venv/bin/activate
+
+# Set CUDA device if needed
+# export CUDA_VISIBLE_DEVICES=0
+
+# Create log directory
+mkdir -p training/logs
+
+# Run training for all models
+echo "Starting SurgicalAI training pipeline..."
+python3 training/train.py --config training/configs/training_config.yaml --models all
+
+# To train individual models, uncomment the appropriate lines below:
+# python3 training/train.py --config training/configs/training_config.yaml --models phase
+# python3 training/train.py --config training/configs/training_config.yaml --models tool
+# python3 training/train.py --config training/configs/training_config.yaml --models mistake
+"""
     
-    # Check number of training images
-    train_dir = "data/train"
-    if os.path.exists(train_dir):
-        img_files = [f for f in os.listdir(train_dir) if f.endswith(('.jpg', '.jpeg', '.png'))]
-        logger.info(f"Found {len(img_files)} training images in {train_dir}")
-    else:
-        logger.warning(f"Training directory {train_dir} not found")
+    script_path = "train_surgical_ai.sh"
+    with open(script_path, 'w') as f:
+        f.write(script_content)
+    
+    # Make executable
+    os.chmod(script_path, 0o755)
+    
+    logger.info(f"✅ Created training script: {script_path}")
+    return True
+
+def create_archive():
+    """Create a zip archive for transfer to training machine."""
+    logger.info("Creating archive for transfer to training machine...")
+    
+    archive_name = "surgical_ai_training.zip"
+    
+    # Create a list of directories to include
+    include_dirs = [
+        "data",
+        "models",
+        "training",
+        "utils",
+        "scripts",
+        "requirements.txt",
+        "train_surgical_ai.sh",
+        "README.md"
+    ]
+    
+    # Use shutil to make a zip archive excluding unnecessary files
+    exclude_dirs = [
+        "__pycache__", 
+        ".git", 
+        "data/m2cai16-tool-locations/__MACOSX",
+        ".DS_Store",
+        "backup"
+    ]
+    
+    try:
+        import zipfile
+        import glob
+        
+        with zipfile.ZipFile(archive_name, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for item in include_dirs:
+                if os.path.isfile(item):
+                    zipf.write(item, os.path.basename(item))
+                else:
+                    for root, dirs, files in os.walk(item):
+                        # Skip excluded directories
+                        dirs[:] = [d for d in dirs if d not in exclude_dirs]
+                        
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            # Skip large/unwanted files
+                            if any(excluded in file_path for excluded in exclude_dirs):
+                                continue
+                            
+                            # Add file to zip
+                            zipf.write(file_path, file_path)
+        
+        logger.info(f"✅ Archive created: {archive_name}")
+        logger.info(f"   Transfer this file to your GPU machine and extract it")
+        logger.info(f"   Then run: ./train_surgical_ai.sh")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to create archive: {str(e)}")
+        return False
 
 def main():
-    logger.info("Preparing SurgicalAI project for Colab training")
+    """Main function to prepare system for training."""
+    parser = argparse.ArgumentParser(description="Prepare SurgicalAI for training")
+    parser.add_argument("--create-archive", action="store_true", 
+                        help="Create a zip archive for transfer to training machine")
+    args = parser.parse_args()
     
-    # Create necessary directories
-    setup_directory_structure()
+    logger.info("Starting SurgicalAI training preparation...")
     
-    # Create .gitkeep files
-    create_gitkeep_files()
+    # Run checks
+    gpu_check = check_gpu()
+    datasets_check = check_datasets()
+    code_check = check_model_code()
+    script_created = create_training_script()
     
-    # Validate and prepare COCO annotations
-    validate_coco_annotations()
+    # Create output directories if they don't exist
+    os.makedirs("training/checkpoints", exist_ok=True)
+    os.makedirs("models/weights", exist_ok=True)
     
-    # Copy training files
-    copy_training_files()
+    # Always create archive since we'll be moving to a GPU machine
+    archive_created = create_archive()
     
-    # Create Colab notebook
-    create_colab_notebook()
+    # Print summary
+    logger.info("\n=== Preparation Summary ===")
+    logger.info(f"GPU available: {'Yes' if gpu_check else 'No'}")
+    logger.info(f"Datasets ready: {'Yes' if datasets_check else 'No'}")
+    logger.info(f"Code files ready: {'Yes' if code_check else 'No'}")
+    logger.info(f"Training script created: {'Yes' if script_created else 'No'}")
+    logger.info(f"Archive created: {'Yes' if archive_created else 'No'}")
     
-    # Create model loader script
-    create_model_loader_script()
-    
-    # Create README with training instructions
-    update_readme()
-    
-    # Create .gitignore
-    create_gitignore()
-    
-    # Check data integrity
-    check_data_integrity()
-    
-    logger.info("Project preparation completed. Ready for training on Google Colab!")
-    logger.info("Next steps:")
-    logger.info("1. Ensure your annotation files are properly filled with real data")
-    logger.info("2. Push your project to GitHub (excluding large files as specified in .gitignore)")
-    logger.info("3. Upload the colab_training/SurgicalAI_Training.ipynb notebook to Google Colab")
-    logger.info("4. Follow the instructions in the notebook to train your models")
+    if datasets_check and code_check and archive_created:
+        logger.info("\n✅ System is ready for training on a GPU machine!")
+        logger.info("1. Transfer surgical_ai_training.zip to your GPU machine")
+        logger.info("2. Extract the archive: unzip surgical_ai_training.zip")
+        logger.info("3. Run the training script: ./train_surgical_ai.sh")
+    else:
+        logger.warning("\n⚠️ Some issues need to be resolved before training.")
 
 if __name__ == "__main__":
     main() 

@@ -36,13 +36,14 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return config
 
 
-def setup_logging(log_level: str = "INFO", log_file: Optional[str] = None) -> logging.Logger:
+def setup_logging(log_level: str = "INFO", log_file: Optional[str] = None, log_dir: Optional[str] = None) -> logging.Logger:
     """
     Set up logging configuration.
     
     Args:
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         log_file: Path to log file (if None, logs to console only)
+        log_dir: Directory to create a timestamped log file (if provided, overrides log_file)
         
     Returns:
         Logger instance
@@ -69,6 +70,16 @@ def setup_logging(log_level: str = "INFO", log_file: Optional[str] = None) -> lo
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     
+    # Determine log file path
+    if log_dir is not None:
+        # Create directory if it doesn't exist
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+        
+        # Create timestamped log file
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        log_file = os.path.join(log_dir, f'train_{timestamp}.log')
+    
     # Create file handler if log file is provided
     if log_file is not None:
         # Create directory if it doesn't exist
@@ -80,6 +91,8 @@ def setup_logging(log_level: str = "INFO", log_file: Optional[str] = None) -> lo
         file_handler.setLevel(numeric_level)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
+        
+        logger.info(f"Logging to {log_file}")
     
     return logger
 

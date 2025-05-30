@@ -13,12 +13,15 @@ import logging
 from typing import List, Dict, Tuple, Optional, Union, Any
 from collections import OrderedDict
 import os
+import torchvision
+from torchvision.models.detection import FasterRCNN
+from torchvision.models.detection.rpn import AnchorGenerator
+from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
 
 logger = logging.getLogger(__name__)
 
 # For torchvision detection models
 try:
-    import torchvision
     from torchvision.models.detection import (
         fasterrcnn_resnet50_fpn, 
         maskrcnn_resnet50_fpn,
@@ -35,245 +38,166 @@ except ImportError:
 
 class AdvancedToolDetectionModel(nn.Module):
     """
-    Advanced surgical tool detection model supporting multiple architectures.
+    Advanced tool detection model using Faster R-CNN.
+    
+    This model uses a Faster R-CNN architecture with various backbone options
+    for detecting surgical tools in laparoscopic videos.
     """
-    def __init__(self, num_classes=8, architecture='faster_rcnn', backbone_name='resnet50',
-                 pretrained=True, use_fpn=True, min_size=800, max_size=1333,
-                 score_threshold=0.5, nms_threshold=0.5, detections_per_img=100):
+    
+    def __init__(self, 
+                 num_classes=8,  # Background + 7 tool classes
+                 architecture='faster_rcnn',
+                 backbone_name='resnet50',
+                 use_fpn=True,
+                 pretrained=True,
+                 score_threshold=0.5):
         """
-        Initialize surgical tool detection model.
+        Initialize tool detection model.
         
         Args:
-            num_classes: Number of tool classes (including background)
-            architecture: Model architecture ('faster_rcnn', 'mask_rcnn', 'retinanet')
-            backbone_name: Backbone network ('resnet50', 'resnet101', 'mobilenet_v3')
-            pretrained: Whether to use pretrained weights
+            num_classes: Number of classes (including background)
+            architecture: Architecture type ('faster_rcnn', 'retinanet', etc.)
+            backbone_name: Backbone model name ('resnet50', 'resnet101', etc.)
             use_fpn: Whether to use Feature Pyramid Network
-            min_size: Minimum size of the image to be rescaled
-            max_size: Maximum size of the image to be rescaled
-            score_threshold: Threshold for object detection scores
-            nms_threshold: NMS IoU threshold
-            detections_per_img: Maximum number of detections per image
+            pretrained: Whether to use pretrained backbone
+            score_threshold: Score threshold for detection predictions
         """
         super().__init__()
-        
-        if not TORCHVISION_AVAILABLE:
-            raise ImportError("torchvision is required for tool detection models.")
         
         self.num_classes = num_classes
         self.architecture = architecture
         self.backbone_name = backbone_name
         self.score_threshold = score_threshold
-        self.nms_threshold = nms_threshold
-        self.detections_per_img = detections_per_img
         
-        # Initialize detection model based on architecture and backbone
-        self.model = self._initialize_model(
-            architecture=architecture,
-            backbone_name=backbone_name,
-            pretrained=pretrained,
-            use_fpn=use_fpn,
-            min_size=min_size,
-            max_size=max_size
-        )
-        
-        # Replace the pre-trained head with a new one for our number of classes
-        self._replace_classifier_head(num_classes)
-    
-    def _initialize_model(self, architecture, backbone_name, pretrained, use_fpn, min_size, max_size):
-        """Initialize the base detection model."""
-        if architecture == 'faster_rcnn':
-            if backbone_name == 'resnet50':
-                model = fasterrcnn_resnet50_fpn(
-                    pretrained=pretrained, 
-                    pretrained_backbone=pretrained,
-                    min_size=min_size,
-                    max_size=max_size
-                )
-            elif backbone_name == 'resnet101':
-                # ResNet101 backbone needs manual configuration
-                from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
-                backbone = resnet_fpn_backbone('resnet101', pretrained=pretrained)
-                model = torchvision.models.detection.FasterRCNN(
-                    backbone, 
-                    num_classes=91,  # COCO classes
-                    min_size=min_size,
-                    max_size=max_size
-                )
-            elif backbone_name == 'mobilenet_v3':
-                model = fasterrcnn_mobilenet_v3_large_fpn(
-                    pretrained=pretrained,
-                    pretrained_backbone=pretrained,
-                    min_size=min_size,
-                    max_size=max_size
-                )
-            else:
-                raise ValueError(f"Unsupported backbone: {backbone_name}")
-                
-        elif architecture == 'mask_rcnn':
-            if backbone_name == 'resnet50':
-                model = maskrcnn_resnet50_fpn(
-                    pretrained=pretrained,
-                    pretrained_backbone=pretrained,
-                    min_size=min_size,
-                    max_size=max_size
-                )
-            elif backbone_name == 'resnet101':
-                # ResNet101 backbone needs manual configuration
-                from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
-                backbone = resnet_fpn_backbone('resnet101', pretrained=pretrained)
-                model = torchvision.models.detection.MaskRCNN(
-                    backbone, 
-                    num_classes=91,  # COCO classes
-                    min_size=min_size,
-                    max_size=max_size
-                )
-            else:
-                raise ValueError(f"Unsupported backbone for Mask R-CNN: {backbone_name}")
-                
-        elif architecture == 'retinanet':
-            if backbone_name == 'resnet50':
-                model = retinanet_resnet50_fpn(
-                    pretrained=pretrained,
-                    pretrained_backbone=pretrained,
-                    min_size=min_size,
-                    max_size=max_size
-                )
-            else:
-                raise ValueError(f"Unsupported backbone for RetinaNet: {backbone_name}")
+        # Initialize model based on architecture
+        if architecture.lower() == 'faster_rcnn':
+            self.model = self._create_faster_rcnn(backbone_name, use_fpn, pretrained, num_classes)
         else:
             raise ValueError(f"Unsupported architecture: {architecture}")
+    
+    def _create_faster_rcnn(self, backbone_name, use_fpn, pretrained, num_classes):
+        """
+        Create Faster R-CNN model with specified backbone.
         
-        # Configure NMS threshold and detections per image
-        if hasattr(model, 'roi_heads') and hasattr(model.roi_heads, 'nms_thresh'):
-            model.roi_heads.nms_thresh = self.nms_threshold
-            model.roi_heads.detections_per_img = self.detections_per_img
+        Args:
+            backbone_name: Name of the backbone model
+            use_fpn: Whether to use Feature Pyramid Network
+            pretrained: Whether to use pretrained backbone
+            num_classes: Number of classes
+            
+        Returns:
+            Initialized Faster R-CNN model
+        """
+        # Create backbone
+        if use_fpn:
+            backbone = resnet_fpn_backbone(
+                backbone_name=backbone_name,
+                pretrained=pretrained
+            )
+        else:
+            # Create ResNet backbone without FPN
+            backbone = getattr(torchvision.models, backbone_name)(pretrained=pretrained)
+            
+            # Remove the last two layers (avgpool and fc)
+            backbone = nn.Sequential(*list(backbone.children())[:-2])
+            
+            # Set output layer and feature dims
+            out_channels = {
+                'resnet18': 512,
+                'resnet34': 512,
+                'resnet50': 2048,
+                'resnet101': 2048,
+                'resnet152': 2048,
+            }[backbone_name]
+            
+            # Create anchor generator
+            anchor_generator = AnchorGenerator(
+                sizes=((32, 64, 128, 256, 512),),
+                aspect_ratios=((0.5, 1.0, 2.0),)
+            )
+            
+            # Create ROI pooler
+            roi_pooler = torchvision.ops.MultiScaleRoIAlign(
+                featmap_names=['0'],
+                output_size=7,
+                sampling_ratio=2
+            )
+            
+            # Create Faster R-CNN model with custom backbone
+            model = FasterRCNN(
+                backbone,
+                num_classes=num_classes,
+                rpn_anchor_generator=anchor_generator,
+                box_roi_pool=roi_pooler,
+                min_size=800,
+                max_size=1333,
+                box_score_thresh=self.score_threshold
+            )
+            
+            return model
         
-        # For RetinaNet
-        if hasattr(model, 'head') and hasattr(model.head, 'nms_thresh'):
-            model.head.nms_thresh = self.nms_threshold
-            model.head.detections_per_img = self.detections_per_img
+        # For FPN backbone, create Faster R-CNN with predefined structure
+        model = torchvision.models.detection.fasterrcnn_resnet50_fpn(
+            pretrained=False,
+            pretrained_backbone=pretrained,
+            num_classes=num_classes,
+            min_size=800,
+            max_size=1333,
+            box_score_thresh=self.score_threshold
+        )
         
         return model
     
-    def _replace_classifier_head(self, num_classes):
-        """Replace the classifier head with a new one for our number of classes."""
-        if self.architecture == 'faster_rcnn' or self.architecture == 'mask_rcnn':
-            # Replace the box predictor
-            in_features = self.model.roi_heads.box_predictor.cls_score.in_features
-            self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
-            
-            # For Mask R-CNN, also replace the mask predictor
-            if self.architecture == 'mask_rcnn':
-                in_features_mask = self.model.roi_heads.mask_predictor.conv5_mask.in_channels
-                hidden_layer = 256
-                self.model.roi_heads.mask_predictor = MaskRCNNPredictor(
-                    in_features_mask, hidden_layer, num_classes
-                )
-                
-        elif self.architecture == 'retinanet':
-            # RetinaNet requires a different approach
-            # This is a simplified version - a complete implementation would need to modify the head
-            logger.warning("For RetinaNet, replacing the classifier is more complex. Using default head.")
-    
     def forward(self, images, targets=None):
         """
-        Forward pass for tool detection.
+        Forward pass.
         
         Args:
-            images: Input images (list of tensors or batched tensor)
-            targets: Optional targets for training (list of dicts with boxes and labels)
+            images: Input images tensor
+            targets: Optional target boxes and labels
             
         Returns:
-            Detected tool boxes, scores, and labels
+            Dict with detection results or loss dict
         """
-        # Convert single batched tensor to list of tensors if needed
-        if isinstance(images, torch.Tensor) and images.dim() == 4:
-            images_list = [img for img in images]
-        else:
-            images_list = images
-            
-        # Set model to training/evaluation mode based on targets
-        self.model.train(targets is not None)
-        
-        # Forward pass through the model
-        if targets is not None:
-            loss_dict = self.model(images_list, targets)
-            return loss_dict
-        else:
-            detections = self.model(images_list)
-            return detections
+        return self.model(images, targets)
     
-    def load(self, checkpoint_path):
+    def compute_loss(self, images, targets):
         """
-        Load model weights from checkpoint.
+        Compute loss for training.
         
         Args:
-            checkpoint_path: Path to model checkpoint
-        """
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        
-        # Check if the checkpoint contains the entire model or just state dict
-        if isinstance(checkpoint, dict) and 'model' in checkpoint:
-            self.load_state_dict(checkpoint['model'])
-        else:
-            self.load_state_dict(checkpoint)
-            
-        logger.info(f"Loaded weights from {checkpoint_path}")
-    
-    def save(self, save_path):
-        """
-        Save model weights to checkpoint.
-        
-        Args:
-            save_path: Path to save the model checkpoint
-        """
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        
-        # Save the model
-        torch.save(self.state_dict(), save_path)
-        logger.info(f"Saved model to {save_path}")
-    
-    def post_process_detections(self, detections, score_threshold=None):
-        """
-        Post-process detection results.
-        
-        Args:
-            detections: Raw detection output from model
-            score_threshold: Override the default score threshold
+            images: Input images tensor
+            targets: Target boxes and labels
             
         Returns:
-            Processed detections with boxes, scores, and labels above threshold
+            Dict with loss components
         """
-        threshold = score_threshold if score_threshold is not None else self.score_threshold
-        processed_results = []
+        return self.model(images, targets)
+    
+    def predict(self, images):
+        """
+        Run prediction on images.
         
-        for detection in detections:
-            boxes = detection['boxes']
-            scores = detection['scores']
-            labels = detection['labels']
+        Args:
+            images: Input images tensor
             
-            # Filter by score threshold
-            mask = scores >= threshold
-            filtered_boxes = boxes[mask]
-            filtered_scores = scores[mask]
-            filtered_labels = labels[mask]
-            
-            # Prepare result dictionary
-            result = {
-                'boxes': filtered_boxes,
-                'scores': filtered_scores,
-                'labels': filtered_labels
-            }
-            
-            # Include masks if available (for Mask R-CNN)
-            if 'masks' in detection:
-                result['masks'] = detection['masks'][mask]
-                
-            processed_results.append(result)
-            
-        return processed_results
+        Returns:
+            List of prediction dicts with boxes, labels, and scores
+        """
+        self.eval()
+        with torch.no_grad():
+            predictions = self.model(images)
+        return predictions
+    
+    def load_state_dict(self, state_dict, strict=True):
+        """
+        Load state dictionary.
+        
+        Args:
+            state_dict: State dictionary
+            strict: Whether to strictly enforce matching keys
+        """
+        self.model.load_state_dict(state_dict, strict=strict)
 
 
 class ToolDetectionEnsemble(nn.Module):
@@ -542,3 +466,23 @@ class ToolDetectionEnsemble(nn.Module):
                 model.save(path)
         else:
             raise ValueError(f"Unsupported save path format: {type(save_paths)}")
+
+
+def get_tool_detection_model(config):
+    """
+    Factory function to create a tool detection model from config.
+    
+    Args:
+        config: Model configuration dictionary
+        
+    Returns:
+        Initialized tool detection model
+    """
+    return AdvancedToolDetectionModel(
+        num_classes=config.get('num_classes', 8),
+        architecture=config.get('name', 'faster_rcnn'),
+        backbone_name=config.get('backbone', 'resnet50'),
+        use_fpn=config.get('use_fpn', True),
+        pretrained=config.get('pretrained', True),
+        score_threshold=config.get('score_threshold', 0.5)
+    )

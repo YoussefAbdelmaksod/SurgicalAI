@@ -1,0 +1,155 @@
+# SurgicalAI Laparoscopic Cholecystectomy Configuration
+
+# Application settings
+app:
+  log_level: INFO
+  port: 5000
+  host: "0.0.0.0"
+  debug: false
+  video_capture:
+    fps: 30
+    width: 1280
+    height: 720
+    process_every_n_frames: 3  # Increased frame processing rate for more real-time feedback
+  
+# Model settings optimized for cholecystectomy
+model:
+  # Phase recognition model settings
+  phase_recognition:
+    model_type: "vit_lstm"
+    vit_model: "vit_base_patch16_224"
+    hidden_size: 512
+    num_layers: 2
+    dropout: 0.3
+    bidirectional: true
+    use_temporal_attention: true
+    freeze_vit: true  # Freeze ViT for faster inference
+    num_classes: 7
+    # Phase-specific confidence thresholds (higher for critical phases)
+    phase_thresholds:
+      preparation: 0.6
+      calot_triangle_dissection: 0.75  # Critical phase, higher threshold
+      clipping_and_cutting: 0.75       # Critical phase, higher threshold
+      gallbladder_dissection: 0.7
+      gallbladder_packaging: 0.6
+      cleaning_and_coagulation: 0.6
+      gallbladder_extraction: 0.6
+  
+  # Tool detection model settings
+  tool_detection:
+    architecture: "faster_rcnn"  # Faster R-CNN for real-time performance
+    backbone: "resnet50"         # Good balance of accuracy and speed
+    use_fpn: true
+    pretrained: true
+    use_ensemble: true
+    ensemble_method: "weighted"
+    ensemble_weights: [0.7, 0.3]  # More weight to primary model
+    score_threshold: 0.6          # Higher threshold for more precise detections
+    nms_threshold: 0.45           # Lower threshold for better separation of nearby tools
+    num_classes: 8                # Background + 7 tool classes
+    # Tool-specific confidence thresholds (higher for critical tools)
+    tool_thresholds:
+      Clipper: 0.7                # Critical tool for clipping
+      Scissors: 0.7               # Critical tool for cutting
+      Grasper: 0.6
+      Hook: 0.6
+      Bipolar: 0.6
+      Irrigator: 0.5
+      Specimen_Bag: 0.5
+  
+  # Mistake detection model settings optimized for cholecystectomy
+  mistake_detection:
+    use_temporal: true
+    temporal_window: 15           # Longer temporal window for better context
+    visual_dim: 768
+    tool_dim: 128
+    hidden_dim: 256
+    num_classes: 3                # No mistake, minor mistake, critical mistake
+    dropout: 0.3
+    # Critical structures specific to cholecystectomy
+    critical_structures:
+      cystic_duct: 0.85          # Detection confidence threshold
+      cystic_artery: 0.85
+      common_bile_duct: 0.90     # Higher threshold for this critical structure
+      hepatic_artery: 0.85
+      liver_bed: 0.75
+    # Critical phase risk multipliers
+    critical_phases:
+      calot_triangle_dissection: 2.0  # Double risk for this critical phase
+      clipping_and_cutting: 2.0       # Double risk for this critical phase
+      gallbladder_dissection: 1.5     # 50% higher risk for this phase
+
+# Optimization settings for real-time performance
+optimization:
+  # Critical path processing rates (frames to skip between processing)
+  critical_path:
+    phase_recognition_interval: 5     # Process every 5 frames
+    tool_detection_interval: 1        # Process every frame (critical for safety)
+    mistake_detection_interval: 3     # Process every 3 frames
+  
+  # Memory optimization
+  memory:
+    max_batch_size: 1
+    optimize_for_inference: true
+    clear_cuda_cache: true
+  
+  # CUDA optimization
+  cuda:
+    use_cudnn_benchmark: true
+    use_mixed_precision: true
+    gpu_memory_fraction: 0.8
+
+# Evaluation settings specific to cholecystectomy
+evaluation:
+  metrics:
+    - accuracy
+    - precision
+    - recall
+    - f1_score
+    - mAP
+    - confusion_matrix
+  # Reference times for each phase in seconds (for cholecystectomy)
+  phase_reference_times:
+    preparation: 120              # 2 minutes
+    calot_triangle_dissection: 480 # 8 minutes
+    clipping_and_cutting: 240     # 4 minutes
+    gallbladder_dissection: 780   # 13 minutes
+    gallbladder_packaging: 180    # 3 minutes
+    cleaning_and_coagulation: 240 # 4 minutes
+    gallbladder_extraction: 180   # 3 minutes
+  # Critical event detection metrics
+  critical_events:
+    clip_placement_accuracy: true
+    critical_view_safety_achieved: true
+    bile_leakage_detection: true
+    bleeding_detection: true
+
+# Voice guidance settings optimized for cholecystectomy
+voice_guidance:
+  enabled: true
+  tts_engine: "auto"
+  voice_gender: "female"
+  rate: 150
+  volume: 0.9
+  enable_logging: true
+  # Specific guidance triggers for cholecystectomy
+  phase_triggers:
+    calot_triangle_dissection: "Critical phase: Ensure clear identification of structures before proceeding."
+    clipping_and_cutting: "Critical phase: Verify clip placement before cutting."
+  # Critical structure warning triggers
+  structure_triggers:
+    common_bile_duct: "Warning: Possible common bile duct in view. Verify before clipping."
+    hepatic_artery: "Warning: Possible hepatic artery in view. Proceed with caution."
+
+# File paths
+paths:
+  weights_dir: "models/weights"
+  tool_detection_weights: "models/weights/tool_detection.pth"
+  phase_recognition_weights: "models/weights/phase_recognition.pth"
+  mistake_detection_weights: "models/weights/mistake_detection.pth"
+  guidance_weights: "models/weights/guidance.pth"
+  procedure_knowledge: "data/procedure_knowledge.json"
+  logs_dir: "logs"
+  # Cholecystectomy-specific paths
+  cholecystectomy_procedure: "data/cholecystectomy_procedure.json"
+  optimized_weights_dir: "models/weights/optimized" 

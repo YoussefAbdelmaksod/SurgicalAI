@@ -1,0 +1,119 @@
+# SurgicalAI Training Configuration
+
+# General training settings
+general:
+  seed: 42
+  cuda: true
+  num_workers: 4
+  distributed: false
+  mixed_precision: true
+  log_interval: 10
+  val_interval: 1  # Validate every N epochs
+  save_interval: 1  # Save checkpoint every N epochs
+  resume: false
+  resume_path: null
+
+# Phase recognition model (ViTLSTM) training settings
+phase_recognition:
+  model:
+    name: "vit_lstm"
+    vit_model: "vit_base_patch16_224"
+    hidden_size: 512
+    num_layers: 2
+    dropout: 0.3
+    use_temporal_attention: true
+    pretrained: true
+    num_classes: 7  # Number of surgical phases
+  
+  training:
+    batch_size: 8
+    sequence_length: 10
+    epochs: 50
+    learning_rate: 0.0001
+    weight_decay: 0.0001
+    lr_scheduler: "cosine"
+    warmup_epochs: 5
+    optimizer: "adam"
+    label_smoothing: 0.1
+    early_stopping_patience: 10
+    grad_clip: 1.0
+  
+  data:
+    dataset: "cholec80"
+    data_dir: "data/Cholec80.v5-cholec80-10-2.coco"
+    train_split: 0.8
+    val_split: 0.1
+    test_split: 0.1
+    augmentations:
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+      random_flip: true
+      random_crop: true
+      crop_size: [224, 224]
+
+# Tool detection model training settings
+tool_detection:
+  model:
+    name: "faster_rcnn"
+    backbone: "resnet50"
+    pretrained: true
+    use_fpn: true
+    num_classes: 8  # Background + 7 tool classes
+    score_threshold: 0.5
+  
+  training:
+    batch_size: 4
+    epochs: 50
+    learning_rate: 0.001
+    weight_decay: 0.0005
+    lr_scheduler: "step"
+    lr_step_size: 10
+    lr_gamma: 0.1
+    optimizer: "sgd"
+    momentum: 0.9
+    early_stopping_patience: 10
+  
+  data:
+    dataset: "m2cai16-tool-locations"
+    data_dir: "data/m2cai16-tool-locations"
+    train_split: 0.8
+    val_split: 0.1
+    test_split: 0.1
+    augmentations:
+      random_flip: true
+      random_rotation: 10
+      random_brightness: 0.2
+      random_contrast: 0.2
+      min_visibility: 0.5
+      min_size: 10
+
+# Mistake detection model training settings
+mistake_detection:
+  model:
+    name: "mistake_detector"
+    visual_dim: 768
+    tool_dim: 128
+    hidden_dim: 256
+    num_classes: 3  # No mistake, low risk, high risk
+    use_temporal: true
+  
+  training:
+    batch_size: 4
+    epochs: 40
+    learning_rate: 0.0005
+    weight_decay: 0.0001
+    lr_scheduler: "cosine"
+    optimizer: "adam"
+    early_stopping_patience: 8
+  
+  data:
+    dataset: "endoscapes"
+    data_dir: "data/endoscapes"
+    supplementary_data_dir: "data/EndoSurgical"
+    train_split: 0.8
+    val_split: 0.1
+    test_split: 0.1
+    use_synthetic_data: true
+    synthetic_ratio: 0.3 

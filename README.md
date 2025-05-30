@@ -1,171 +1,161 @@
 # SurgicalAI
 
-SurgicalAI is a prototype AI system for surgical video analysis providing real-time feedback and guidance. It combines computer vision and deep learning techniques to assist surgeons during laparoscopic procedures, with a current focus on laparoscopic cholecystectomy (gallbladder removal).
+A personalized guidance system for laparoscopic cholecystectomy, powered by deep learning.
 
-## Project Status: Research Prototype
+## Overview
 
-**IMPORTANT:** This system is a prototype that has undergone initial training and validation. While functional, it requires further clinical validation before consideration for real-world applications.
+SurgicalAI combines computer vision, temporal modeling, and personalized guidance to enhance surgical workflow during laparoscopic cholecystectomy procedures. The system uses a multi-model approach to recognize surgical phases, detect instruments, identify potential mistakes, and provide real-time guidance adapted to the surgeon's experience level.
 
-## Features
-
-- **Surgical Phase Recognition**: Identifying surgical phases using Vision Transformer (ViT) with LSTM temporal processing
-- **Surgical Tool Detection**: Detecting surgical instruments with Faster R-CNN and Feature Pyramid Networks
-- **Mistake Detection**: Experimental identification of potential surgical mistakes and providing risk assessment
-- **Guidance Generation**: Real-time guidance based on detected phases, tools, and potential mistakes
-- **Web Interface**: User-friendly web application for video processing and visualization
-
-## Technical Stack
-
-- **Vision Models**: 
-  - ViT-LSTM for phase recognition
-  - Faster R-CNN for tool detection
-  - Multi-modal fusion for mistake detection
-- **NLP**: GPT-2 for guidance generation
-- **Training Data**: Built using the Cholec80 dataset plus additional collected surgical videos
-- **Frontend**: Flask-based web application
-
-## System Interface
-
-![SurgicalAI Interface](docs/images/interface_screenshot.jpg)
-
-The system displays phase recognition, tool detection, and risk assessment in real-time. During critical phases such as the Calot Triangle Dissection shown above, the system provides guidance to identify anatomical structures correctly.
-
-## Installation
-
-### Prerequisites
-
-- Python 3.8+
-- PyTorch 1.8+
-- CUDA-compatible GPU (recommended for real-time processing)
-
-### Setup
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/YoussefAbdelmaksod1/SurgicalAI.git
-   cd SurgicalAI
-   ```
-
-2. Create a virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. Download trained model weights (already included in the repository under models/weights/)
-
-## Usage
-
-### Running the Web Application (Under Development)
-
-```bash
-python app/main.py --mode web --host localhost --port 5000
-```
-
-This starts the web server at http://localhost:5000 where you can:
-- Upload surgical videos for analysis
-- View real-time analysis results
-- Access visualizations of detected phases, tools, and potential mistakes
-
-**Note:** While the models have been trained, this prototype is intended for research purposes and should not be used for clinical decision-making without proper medical supervision.
-
-### Processing Videos via Command Line
-
-You can also process videos directly from the command line:
-
-```bash
-python app/main.py --mode video --input path/to/surgery.mp4 --output results.mp4
-```
+Key features:
+- **Phase recognition** with ViT-LSTM model for temporal understanding of surgical workflow
+- **Tool detection** for instrument tracking using Faster R-CNN
+- **Mistake detection** to identify potential errors with risk assessment
+- **Personalized guidance** based on surgeon experience level
+- **Voice assistant** for hands-free interaction
 
 ## Project Structure
 
 ```
 SurgicalAI/
-├── app/                # Web application and interface
-│   ├── main.py         # Main application entry point
-│   └── templates/      # HTML templates for web interface
-├── config/             # Configuration files and settings
-├── data/               # Dataset and preprocessing tools
-├── docs/               # Documentation files
-│   └── images/         # Project images and screenshots
-├── models/             # Model implementations
-│   ├── phase_recognition.py  # Surgical phase recognition model
-│   ├── tool_detection.py     # Surgical tool detection model
-│   ├── mistake_detection.py  # Mistake detection model
-│   ├── voice_assistant.py    # Voice guidance module
-│   └── weights/        # Trained model weights
-├── scripts/            # Utility scripts for data processing
-├── tests/              # Unit and integration tests
-├── training/           # Training implementations and scripts
-├── utils/              # Shared utility functions
-├── .gitignore          # Git ignore file
-├── requirements.txt    # Python dependencies
-└── setup.py            # Package installation setup
+├── app/                    # Main application
+│   └── main.py             # Entry point for the application
+├── data/                   # Data directory
+│   ├── Cholec80.v5-cholec80-10-2.coco/  # Cholec80 dataset in COCO format
+│   ├── endoscapes/         # EndoScapes dataset
+│   ├── m2cai16-tool-locations/ # m2cai16 tool dataset
+│   ├── procedure_knowledge.json  # Knowledge base for procedures
+│   └── videos/             # Input videos for inference
+├── models/                 # Model implementations
+│   ├── gpt_guidance.py     # GPT-based guidance module
+│   ├── mistake_detection.py # Mistake detection model
+│   ├── phase_recognition.py # Phase recognition model
+│   ├── tool_detection.py   # Tool detection model
+│   └── voice_assistant.py  # Voice assistant module
+├── scripts/                # Utility scripts
+│   ├── initialize_system.py # System initialization
+│   ├── run_inference.py    # Run inference on videos
+│   ├── setup_profiles.py   # Set up user profiles
+│   └── train_models.py     # Train all models
+├── training/               # Training pipeline
+│   ├── configs/            # Training configurations
+│   ├── checkpoints/        # Model checkpoints
+│   ├── logs/               # Training logs
+│   ├── mistake_detection_trainer.py # Mistake detection trainer
+│   ├── phase_recognition_trainer.py # Phase recognition trainer
+│   ├── surgical_datasets.py # Dataset loaders
+│   ├── tool_detection_trainer.py # Tool detection trainer
+│   └── train.py            # Main training script
+└── utils/                  # Utilities
+    ├── helpers.py          # Helper functions
+    └── user_profiles.py    # User profile management
 ```
 
-## Model Architecture Details
+## Installation
 
-### Phase Recognition
-- **Architecture**: Vision Transformer (ViT-B/16) with Bidirectional LSTM
-- **Training Data**: Sequences of video frames with phase annotations
-- **Output**: Classification of 7 surgical phases
-- **Performance**: ~85% accuracy on validation set
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/SurgicalAI.git
+cd SurgicalAI
+```
 
-### Tool Detection
-- **Architecture**: Faster R-CNN with ResNet50 backbone
-- **Training Data**: Annotated images with bounding boxes around surgical tools
-- **Output**: Bounding boxes, class labels, and confidence scores for detected tools
-- **Performance**: mAP of 0.78 on validation set
+2. Set up a Python virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
 
-### Mistake Detection
-- **Architecture**: Multi-modal fusion of visual features and tool detections
-- **Training Data**: Video segments with mistake annotations
-- **Output**: Mistake classification and risk assessment
-- **Performance**: ~70% precision, 65% recall for high-risk situations
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-## Current Limitations
+4. Download datasets (instructions in `data/README.md`)
 
-- **Training Data**: Based primarily on the Cholec80 dataset with supplementary data
-- **Validation**: Initial validation complete, but requires further clinical testing
-- **Performance**: Real-time processing may be challenging on standard hardware
-- **Scope**: Currently focused only on laparoscopic cholecystectomy procedures
+## Training Models
 
-## Future Work
+### Prepare the data
 
-- Expand the dataset with more diverse surgical videos
-- Collaborate with more medical professionals for annotation and validation
-- Optimize models for better real-time performance
-- Develop more comprehensive mistake detection capabilities
-- Extend to additional types of surgical procedures
+The system requires three datasets:
+- Cholec80 (in COCO format) for phase recognition
+- m2cai16-tool-locations for tool detection
+- EndoScapes for mistake detection
 
-## Contributing
+Place these datasets in their respective folders under the `data/` directory.
 
-Contributions are welcome! If you're interested in contributing, especially if you have expertise in medical imaging or surgical procedures, please:
+### Configuration
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Commit your changes: `git commit -m 'Add some feature'`
-4. Push to the branch: `git push origin feature-name`
-5. Submit a pull request
+Edit the training configuration in `training/configs/training_config.yaml` to customize hyperparameters, model architecture, and training settings.
+
+### Train individual models
+
+To train specific models:
+
+```bash
+# Train phase recognition model
+python scripts/train_models.py --models phase
+
+# Train tool detection model
+python scripts/train_models.py --models tool
+
+# Train mistake detection model
+python scripts/train_models.py --models mistake
+```
+
+### Train all models
+
+To train all models in sequence:
+
+```bash
+python scripts/train_models.py --models all
+```
+
+### Resume training
+
+To resume training from a checkpoint:
+
+```bash
+python scripts/train_models.py --models phase --resume --phase-ckpt training/checkpoints/phase_recognition/best_model.pth
+```
+
+## Inference
+
+Run inference on a video:
+
+```bash
+python scripts/run_inference.py --video data/videos/test_video.mp4 --output results/
+```
+
+## System Setup
+
+Set up user profiles:
+
+```bash
+python scripts/setup_profiles.py
+```
+
+Initialize the system:
+
+```bash
+python scripts/initialize_system.py
+```
+
+## Main Application
+
+Run the main application:
+
+```bash
+python app/main.py
+```
 
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Disclaimer
-
-**This software is a research prototype.** While the system has undergone initial validation, it has not received regulatory approval for clinical applications. Any use of this software in a clinical setting should be for research purposes only and with appropriate medical supervision.
-
 ## Acknowledgments
 
-- The SurgicalAI project was developed with input from surgical specialists
-- The Cholec80 dataset for providing foundational training data
-- PyTorch and torchvision for providing the deep learning framework
+- Cholec80 dataset: [http://camma.u-strasbg.fr/datasets](http://camma.u-strasbg.fr/datasets)
+- m2cai16-tool-locations dataset: [http://camma.u-strasbg.fr/m2cai2016](http://camma.u-strasbg.fr/m2cai2016)
+- EndoScapes dataset: [https://endoscapes.grand-challenge.org/](https://endoscapes.grand-challenge.org/)
 
 
 
