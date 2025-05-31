@@ -72,7 +72,7 @@ def check_datasets():
     if not tool_path.exists():
         logger.warning(f"❌ m2cai16-tool-locations dataset not found at: {tool_path}")
         datasets_ok = False
-    else:
+        else:
         logger.info(f"✅ Found m2cai16-tool-locations dataset at: {tool_path}")
     
     # EndoScapes dataset
@@ -161,63 +161,6 @@ python3 training/train.py --config training/configs/training_config.yaml --model
     logger.info(f"✅ Created training script: {script_path}")
     return True
 
-def create_archive():
-    """Create a zip archive for transfer to training machine."""
-    logger.info("Creating archive for transfer to training machine...")
-    
-    archive_name = "surgical_ai_training.zip"
-    
-    # Create a list of directories to include
-    include_dirs = [
-        "data",
-        "models",
-        "training",
-        "utils",
-        "scripts",
-        "requirements.txt",
-        "train_surgical_ai.sh",
-        "README.md"
-    ]
-    
-    # Use shutil to make a zip archive excluding unnecessary files
-    exclude_dirs = [
-        "__pycache__", 
-        ".git", 
-        "data/m2cai16-tool-locations/__MACOSX",
-        ".DS_Store",
-        "backup"
-    ]
-    
-    try:
-        import zipfile
-        import glob
-        
-        with zipfile.ZipFile(archive_name, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for item in include_dirs:
-                if os.path.isfile(item):
-                    zipf.write(item, os.path.basename(item))
-                else:
-                    for root, dirs, files in os.walk(item):
-                        # Skip excluded directories
-                        dirs[:] = [d for d in dirs if d not in exclude_dirs]
-                        
-                        for file in files:
-                            file_path = os.path.join(root, file)
-                            # Skip large/unwanted files
-                            if any(excluded in file_path for excluded in exclude_dirs):
-                                continue
-                            
-                            # Add file to zip
-                            zipf.write(file_path, file_path)
-        
-        logger.info(f"✅ Archive created: {archive_name}")
-        logger.info(f"   Transfer this file to your GPU machine and extract it")
-        logger.info(f"   Then run: ./train_surgical_ai.sh")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to create archive: {str(e)}")
-        return False
-
 def main():
     """Main function to prepare system for training."""
     parser = argparse.ArgumentParser(description="Prepare SurgicalAI for training")
@@ -237,22 +180,31 @@ def main():
     os.makedirs("training/checkpoints", exist_ok=True)
     os.makedirs("models/weights", exist_ok=True)
     
-    # Always create archive since we'll be moving to a GPU machine
-    archive_created = create_archive()
-    
     # Print summary
     logger.info("\n=== Preparation Summary ===")
     logger.info(f"GPU available: {'Yes' if gpu_check else 'No'}")
     logger.info(f"Datasets ready: {'Yes' if datasets_check else 'No'}")
     logger.info(f"Code files ready: {'Yes' if code_check else 'No'}")
     logger.info(f"Training script created: {'Yes' if script_created else 'No'}")
-    logger.info(f"Archive created: {'Yes' if archive_created else 'No'}")
     
-    if datasets_check and code_check and archive_created:
-        logger.info("\n✅ System is ready for training on a GPU machine!")
-        logger.info("1. Transfer surgical_ai_training.zip to your GPU machine")
-        logger.info("2. Extract the archive: unzip surgical_ai_training.zip")
-        logger.info("3. Run the training script: ./train_surgical_ai.sh")
+    if args.create_archive:
+        archive_name = "surgical_ai_training.zip"
+        logger.info(f"Creating archive: {archive_name}...")
+        
+        # Use shutil to make a zip archive excluding large data files
+        exclude_dirs = ["__pycache__", ".git", "data/m2cai16-tool-locations/__MACOSX"]
+        shutil.make_archive(
+            "surgical_ai_training",
+            "zip",
+            ".",
+            exclude=lambda path: any(excluded in path for excluded in exclude_dirs)
+        )
+        logger.info(f"✅ Archive created: {archive_name}")
+    
+    if datasets_check and code_check:
+        logger.info("\n✅ System is ready for training!")
+        logger.info("Run the following command to start training:")
+        logger.info("   ./train_surgical_ai.sh")
     else:
         logger.warning("\n⚠️ Some issues need to be resolved before training.")
 

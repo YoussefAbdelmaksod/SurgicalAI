@@ -1,7 +1,8 @@
-# Core dependencies for SurgicalAI training
+# Core dependencies
 numpy>=1.20.0
 scipy>=1.7.0
 matplotlib>=3.4.0
+pandas>=1.3.0
 scikit-learn>=0.24.0
 PyYAML>=6.0
 tqdm>=4.62.0
@@ -9,17 +10,94 @@ tqdm>=4.62.0
 # PyTorch ecosystem
 torch>=1.10.0
 torchvision>=0.11.0
-timm>=0.6.12
+torchaudio>=0.10.0
+timm>=0.6.12  # For Vision Transformers
 
 # Computer vision
-opencv-python-headless>=4.5.0
+opencv-python>=4.5.0
 albumentations>=1.1.0
 Pillow>=9.0.0
 
 # Data processing
+transforms3d>=0.3.1
 pycocotools>=2.0.4
 
-# Training utilities
+# Web & API
+Flask>=2.0.0
+requests>=2.26.0
+uvicorn>=0.15.0
+fastapi>=0.70.0
+
+# Audio processing
+librosa>=0.8.0
+soundfile>=0.10.3
+pydub>=0.25.1
+
+# Text processing & NLP
+transformers>=4.11.0
+nltk>=3.6.0
+gensim>=4.1.0
+
+# Utilities
+jsonschema>=4.4.0
 tensorboard>=2.7.0
+colorama>=0.4.4
+attrs>=21.2.0
+rich>=10.0.0
+
+# Speech recognition & synthesis
+SpeechRecognition>=3.8.1
+pyttsx3>=2.90
+
+# GPT integration
+openai>=0.27.0
+
+# Hyperparameter optimization
+optuna==3.2.0
+
+# Visualization and logging
+plotly==5.15.0
+
+# Utilities
+psutil==5.9.5
+
+# Optional: for parallel processing
+joblib==1.3.1
+
+# Optional: for GPU monitoring
+gputil==1.4.0
+
+# Optional: for storing models/results
+h5py==3.9.0
+
+# Deep learning and vision
 einops>=0.4.1
-torchmetrics>=0.8.0 
+torchmetrics>=0.8.0
+pytorchvideo>=0.1.5
+kornia>=0.6.0
+torchtext>=0.10.0
+torch-lr-finder>=0.2.1
+
+# Web interface
+jinja2>=3.0.1
+
+# GPT model and guidance
+accelerate>=0.20.0
+tokenizers>=0.13.3
+sentencepiece>=0.1.99
+
+# Voice assistant and speech
+pygame>=2.1.0
+gtts>=2.2.4
+pyaudio>=0.2.13
+
+# Windows-specific TTS
+pywin32>=303; platform_system=="Windows"
+
+# Visualization and data handling
+pyarrow>=6.0.1
+
+# Utilities for production
+flask-cors>=3.0.10
+gunicorn>=20.1.0; platform_system!="Windows"
+waitress>=2.1.2 

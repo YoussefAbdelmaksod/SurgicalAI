@@ -74,7 +74,7 @@ class AdvancedToolDetectionModel(nn.Module):
             self.model = self._create_faster_rcnn(backbone_name, use_fpn, pretrained, num_classes)
         else:
             raise ValueError(f"Unsupported architecture: {architecture}")
-    
+        
     def _create_faster_rcnn(self, backbone_name, use_fpn, pretrained, num_classes):
         """
         Create Faster R-CNN model with specified backbone.

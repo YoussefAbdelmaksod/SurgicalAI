@@ -12,17 +12,10 @@ import torch
 import cv2
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+import albumentations as A
 from pathlib import Path
 from PIL import Image
 import logging
-
-# Handle missing albumentations gracefully
-try:
-    import albumentations as A
-    ALBUMENTATIONS_AVAILABLE = True
-except ImportError:
-    ALBUMENTATIONS_AVAILABLE = False
-    logging.warning("albumentations package not found. Using torchvision transforms as fallback.")
 
 logger = logging.getLogger(__name__)
 
@@ -247,36 +240,18 @@ class ToolDetectionDataset(Dataset):
         
         # Set up default transforms if none provided
         if transform is None:
-            if ALBUMENTATIONS_AVAILABLE:
-                if split == 'train':
-                    self.transform = A.Compose([
-                        A.Resize(height=img_size[0], width=img_size[1]),
-                        A.HorizontalFlip(p=0.5),
-                        A.RandomBrightnessContrast(p=0.2),
-                        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-                    ], bbox_params=A.BboxParams(format='pascal_voc', min_visibility=min_visibility))
-                else:
-                    self.transform = A.Compose([
-                        A.Resize(height=img_size[0], width=img_size[1]),
-                        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-                    ], bbox_params=A.BboxParams(format='pascal_voc', min_visibility=min_visibility))
+            if split == 'train':
+                self.transform = A.Compose([
+                    A.Resize(height=img_size[0], width=img_size[1]),
+                    A.HorizontalFlip(p=0.5),
+                    A.RandomBrightnessContrast(p=0.2),
+                    A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ], bbox_params=A.BboxParams(format='pascal_voc', min_visibility=min_visibility))
             else:
-                # Fallback to torchvision transforms (will not handle bounding boxes)
-                logger.warning("Using torchvision transforms fallback for ToolDetectionDataset - bounding box augmentation is disabled!")
-                if split == 'train':
-                    self.transform = transforms.Compose([
-                        transforms.Resize(img_size),
-                        transforms.RandomHorizontalFlip(),
-                        transforms.ColorJitter(brightness=0.2, contrast=0.2),
-                        transforms.ToTensor(),
-                        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-                    ])
-                else:
-                    self.transform = transforms.Compose([
-                        transforms.Resize(img_size),
-                        transforms.ToTensor(),
-                        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-                    ])
+                self.transform = A.Compose([
+                    A.Resize(height=img_size[0], width=img_size[1]),
+                    A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ], bbox_params=A.BboxParams(format='pascal_voc', min_visibility=min_visibility))
         else:
             self.transform = transform
         
@@ -368,22 +343,13 @@ class ToolDetectionDataset(Dataset):
         
         # Apply transforms
         if self.transform:
-            if ALBUMENTATIONS_AVAILABLE and isinstance(self.transform, A.Compose):
-                # Use albumentations
-                transformed = self.transform(image=image, bboxes=boxes, class_labels=labels)
-                image = transformed['image']
-                boxes = transformed['bboxes']
-                labels = transformed['class_labels']
-                
-                # Convert to tensor
-                image = torch.from_numpy(image.transpose(2, 0, 1)).float()
-            else:
-                # Use torchvision transforms (no bbox transforms)
-                pil_image = Image.fromarray(image)
-                image = self.transform(pil_image)
-        else:
-            # Convert to tensor without transforms
-            image = torch.from_numpy(image.transpose(2, 0, 1)).float() / 255.0
+            transformed = self.transform(image=image, bboxes=boxes, class_labels=labels)
+            image = transformed['image']
+            boxes = transformed['bboxes']
+            labels = transformed['class_labels']
+        
+        # Convert to tensor
+        image = torch.from_numpy(image.transpose(2, 0, 1)).float()
         
         if not boxes:
             # Handle case with no boxes after transform

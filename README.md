@@ -147,6 +147,111 @@ Run the main application:
 python app/main.py
 ```
 
+## Model Evaluation
+
+The system includes a comprehensive evaluation pipeline to assess model performance.
+
+### Run evaluation on all models
+
+```bash
+python scripts/evaluate_models.py --models all
+```
+
+### Evaluate specific models
+
+```bash
+# Evaluate phase recognition model
+python scripts/evaluate_models.py --models phase
+
+# Evaluate tool detection model
+python scripts/evaluate_models.py --models tool
+
+# Evaluate mistake detection model
+python scripts/evaluate_models.py --models mistake
+```
+
+### Evaluation metrics
+
+The evaluation scripts generate the following metrics:
+
+- **Phase Recognition**: Accuracy, Precision, Recall, F1 Score, Confusion Matrix
+- **Tool Detection**: mAP, mAP@50, mAP@75, mAP for small/medium/large objects, AR
+- **Mistake Detection**: Accuracy, Precision, Recall, F1 Score, Confusion Matrix
+
+Results are saved in the `evaluation/results` directory.
+
+## Docker Containerization
+
+The project includes Docker support for easy deployment and reproducibility.
+
+### Building the Docker image
+
+```bash
+docker build -t surgicalai:latest .
+```
+
+### Running with Docker
+
+The Docker container supports various modes of operation:
+
+#### Run the main application
+
+```bash
+docker run --gpus all -p 8000:8000 surgicalai:latest
+```
+
+#### Run training
+
+```bash
+docker run --gpus all -v /path/to/data:/app/data surgicalai:latest train all
+```
+
+To train specific models:
+
+```bash
+docker run --gpus all -v /path/to/data:/app/data surgicalai:latest train phase
+```
+
+#### Run evaluation
+
+```bash
+docker run --gpus all -v /path/to/data:/app/data -v /path/to/checkpoints:/app/training/checkpoints surgicalai:latest evaluate all
+```
+
+#### Run inference on a video
+
+```bash
+docker run --gpus all -v /path/to/video.mp4:/app/data/videos/input.mp4 surgicalai:latest inference /app/data/videos/input.mp4
+```
+
+### Using Docker Compose
+
+For convenience, the project includes a docker-compose.yml file with predefined services.
+
+#### Run the main application
+
+```bash
+docker-compose up
+```
+
+#### Run training
+
+```bash
+docker-compose --profile train up train
+```
+
+#### Run evaluation
+
+```bash
+docker-compose --profile evaluate up evaluate
+```
+
+#### Run inference
+
+```bash
+docker-compose --profile inference up inference
+```
+
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.

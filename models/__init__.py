@@ -17,20 +17,8 @@ from .tool_detection import AdvancedToolDetectionModel, ToolDetectionEnsemble, g
 from .mistake_detection import SurgicalMistakeDetector, GPTSurgicalAssistant, get_mistake_detector_model
 from .ensemble import ModelEnsemble, MultiModalFusion
 from .base_model import BaseModel
-
-# Try to import optional modules
-try:
-    from .voice_assistant import VoiceAssistant
-except ImportError:
-    logger.warning("pyttsx3 not installed. Voice assistant will not be available.")
-    VoiceAssistant = None
-
-# Try to import GPT guidance
-try:
-    from .gpt_guidance import GPTGuidance
-except ImportError:
-    logger.warning("transformers package not installed. GPT-based models will not be available.")
-    GPTGuidance = None
+from .voice_assistant import VoiceAssistant
+from .gpt_guidance import GPTGuidance
 
 # Define the paths to model weights
 WEIGHTS_DIR = Path(__file__).parent / "weights"

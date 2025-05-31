@@ -376,7 +376,7 @@ class SurgicalMistakeDetector(nn.Module):
             nn.Linear(hidden_dim, 1),
             nn.Sigmoid()  # Output between 0 and 1
         )
-    
+        
     def forward(self, x, tool_features=None):
         """
         Forward pass.
@@ -403,7 +403,7 @@ class SurgicalMistakeDetector(nn.Module):
         
         # Process visual features
         visual_features = self.visual_encoder(x)  # [batch_size, seq_len, hidden_dim]
-        
+            
         # Process tool features if provided
         if tool_features is not None:
             tool_encoded = self.tool_encoder(tool_features)  # [batch_size, seq_len, hidden_dim//2]

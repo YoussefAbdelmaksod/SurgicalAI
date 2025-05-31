@@ -1,0 +1,54 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Data directories (to be mounted as volumes)
+data/Cholec80.v5-cholec80-10-2.coco/*
+data/m2cai16-tool-locations/*
+data/endoscapes/*
+data/EndoSurgical/*
+data/videos/*
+
+# Checkpoints and logs (to be mounted as volumes)
+training/checkpoints/*
+training/logs/*
+evaluation/results/*
+
+# Development files
+.vscode
+.idea
+*.ipynb
+*.pyc
+__pycache__
+*.pyo
+*.pyd
+.Python
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Docker
+.dockerignore
+Dockerfile
+docker-compose.yml
+
+# Documentation
+*.md
+!README.md
+docs/
+LICENSE
+
+# Miscellaneous
+*.log
+*.csv
+*.dat
+*.out
+*.pid
+*.seed
+*.pid.lock
+.DS_Store 

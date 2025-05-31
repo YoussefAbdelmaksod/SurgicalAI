@@ -256,7 +256,7 @@
             ],
             "critical": true
         }
-    },
+        },
     "common_mistakes": {
         "preparation": [
             "Improper patient positioning",
@@ -308,7 +308,7 @@
             "Inadequate fascial closure of large port sites",
             "Poor skin closure technique",
             "Failure to account for all instruments and sponges"
-        ]
+            ]
     },
     "critical_view_of_safety": {
         "description": "A method of identifying the cystic structures to prevent bile duct injury",
@@ -393,7 +393,7 @@
                 "Use electrocautery for small vessels",
                 "Apply clips for larger vessels",
                 "Convert to open if uncontrollable"
-            ]
+        ]
         }
     }
 } 

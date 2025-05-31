@@ -151,15 +151,15 @@ class TTSEngine:
                 logger.error(f"Error in TTS processing thread: {str(e)}")
         
         logger.debug("TTS processing thread exiting.")
-        
+            
     def stop(self):
         """Stop TTS processing."""
         self.is_running = False
-        
+            
         # Clear the queue
         with self.message_queue.mutex:
             self.message_queue.queue.clear()
-            
+        
     def cleanup(self):
         """Clean up resources."""
         self.stop()
@@ -225,7 +225,7 @@ class STTEngine:
                 # Listen for command
                 audio = self.recognizer.listen(
                     source, 
-                    timeout=self.timeout,
+                    timeout=self.timeout, 
                     phrase_time_limit=self.phrase_time_limit
                 )
                 
@@ -512,29 +512,29 @@ class VoiceAssistant:
             else:
                 # Standard non-personalized guidance
                 self.speak(f"Entering {phase_name} phase.", priority_level="instruction")
-                
-                # Provide additional guidance based on the phase
-                if phase_name == "Preparation":
-                    self.speak("Please ensure all tools are properly sterilized and ready.", 
-                               priority_level="instruction")
-                elif phase_name == "Calot's Triangle Dissection":
-                    self.speak("Critical phase. Identify cystic duct and artery.", 
-                               priority_level="instruction")
-                elif phase_name == "Clipping and Cutting":
-                    self.speak("Ensure correct placement of clips before cutting.", 
-                               priority_level="warning")
-                elif phase_name == "Gallbladder Dissection":
-                    self.speak("Maintain gentle upward traction during dissection.", 
-                               priority_level="instruction")
-                elif phase_name == "Gallbladder Extraction":
-                    self.speak("Verify complete removal and inspect for bleeding.", 
-                               priority_level="instruction")
-                elif phase_name == "Cleaning and Coagulation":
-                    self.speak("Check for bile leakage and ensure hemostasis.", 
-                               priority_level="instruction")
-                elif phase_name == "Closing":
-                    self.speak("Verify no instruments or sponges remain in the cavity.", 
-                               priority_level="warning")
+            
+            # Provide additional guidance based on the phase
+            if phase_name == "Preparation":
+                self.speak("Please ensure all tools are properly sterilized and ready.", 
+                           priority_level="instruction")
+            elif phase_name == "Calot's Triangle Dissection":
+                self.speak("Critical phase. Identify cystic duct and artery.", 
+                           priority_level="instruction")
+            elif phase_name == "Clipping and Cutting":
+                self.speak("Ensure correct placement of clips before cutting.", 
+                           priority_level="warning")
+            elif phase_name == "Gallbladder Dissection":
+                self.speak("Maintain gentle upward traction during dissection.", 
+                           priority_level="instruction")
+            elif phase_name == "Gallbladder Extraction":
+                self.speak("Verify complete removal and inspect for bleeding.", 
+                           priority_level="instruction")
+            elif phase_name == "Cleaning and Coagulation":
+                self.speak("Check for bile leakage and ensure hemostasis.", 
+                           priority_level="instruction")
+            elif phase_name == "Closing":
+                self.speak("Verify no instruments or sponges remain in the cavity.", 
+                           priority_level="warning")
     
     def warn_about_mistake(self, mistake_info):
         """
@@ -572,7 +572,7 @@ class VoiceAssistant:
             )
         else:
             self.speak(warning_message, priority_level=priority_level)
-            
+    
     def provide_tool_guidance(self, current_tools, recommended_tools):
         """
         Provide guidance on tool usage.
@@ -593,10 +593,10 @@ class VoiceAssistant:
                     f"Consider using {missing_tool} for this step.",
                     priority_level="information"
                 )
-            else:
+        else:
                 self.speak(f"Consider using {missing_tool} for this step.", 
                            priority_level="information")
-                           
+            
     def notify_critical_view_achieved(self, is_achieved, missing_criteria=None):
         """
         Notify about critical view of safety status.
@@ -627,7 +627,7 @@ class VoiceAssistant:
             else:
                 self.speak(f"Critical view not yet achieved. Missing: {criteria_str}", 
                            priority_level="warning")
-    
+        
     def acknowledge_correct_action(self):
         """Provide positive feedback for correct action."""
         if self.feedback_level == "full":
@@ -643,7 +643,7 @@ class VoiceAssistant:
             if self.user_profile:
                 self.provide_personalized_guidance(message, priority_level="feedback")
             else:
-                self.speak(message, priority_level="feedback")
+            self.speak(message, priority_level="feedback")
             
     def listen_for_command(self):
         """

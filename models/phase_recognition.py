@@ -16,34 +16,17 @@ import os
 import torchvision.models as models
 from timm.models.vision_transformer import VisionTransformer
 import timm
-from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
 logger = logging.getLogger(__name__)
 
-# Handle potential import errors with timm
+# Try importing timm for ViT models
 try:
     import timm
-    from timm.models.vision_transformer import VisionTransformer
     TIMM_AVAILABLE = True
-    logger.info("timm package is available. Using Vision Transformer models.")
 except ImportError:
+    logger.warning("timm package not installed. Using PyTorch's built-in Vision Transformer implementation.")
     TIMM_AVAILABLE = False
-    logger.warning("timm package not found. Vision Transformer models will not be available.")
-    # Create a placeholder class to avoid errors
-    class VisionTransformer:
-        def __init__(self, *args, **kwargs):
-            raise ImportError("timm package not found. Cannot create Vision Transformer models.")
 
-# Mapping of surgical phases
-PHASE_MAPPING = {
-    0: 'preparation',
-    1: 'calot_triangle_dissection',
-    2: 'clipping_and_cutting',
-    3: 'gallbladder_dissection',
-    4: 'gallbladder_packaging',
-    5: 'cleaning_and_coagulation',
-    6: 'gallbladder_extraction'
-}
 
 class PositionalEncoding(nn.Module):
     """
@@ -105,7 +88,7 @@ class TemporalAttention(nn.Module):
         
         Args:
             x: Input tensor of shape [batch_size, seq_len, hidden_size]
-            
+        
         Returns:
             Attended tensor of same shape
         """
@@ -209,27 +192,12 @@ class ViTLSTM(nn.Module):
         """
         super().__init__()
         
-        # Initialize ViT model with error handling
-        try:
-            if TIMM_AVAILABLE:
-                self.vit = timm.create_model(vit_model, pretrained=pretrained)
-                # Get ViT feature dimension
-                vit_feat_dim = self.vit.head.in_features
-                self.vit.head = nn.Identity()  # Remove classification head
-            else:
-                # Fallback to a basic CNN if timm is not available
-                logger.warning("Using ResNet18 as fallback for ViT")
-                resnet = models.resnet18(pretrained=False)
-                # Remove classification layer
-                self.vit = nn.Sequential(*list(resnet.children())[:-1])
-                vit_feat_dim = 512  # ResNet18 feature dimension
-        except Exception as e:
-            logger.warning(f"Error loading pretrained ViT model: {str(e)}")
-            logger.warning("Using ResNet18 as fallback for ViT")
-            resnet = models.resnet18(pretrained=False)
-            # Remove classification layer
-            self.vit = nn.Sequential(*list(resnet.children())[:-1])
-            vit_feat_dim = 512  # ResNet18 feature dimension
+        # Initialize ViT model
+        self.vit = timm.create_model(vit_model, pretrained=pretrained)
+        
+        # Get ViT feature dimension
+        vit_feat_dim = self.vit.head.in_features
+        self.vit.head = nn.Identity()  # Remove classification head
         
         # Project ViT features to LSTM input size
         self.projection = nn.Linear(vit_feat_dim, hidden_size)
@@ -269,15 +237,11 @@ class ViTLSTM(nn.Module):
         """
         batch_size, seq_len = x.shape[:2]
         
-        # Reshape input for feature extraction
+        # Reshape input for ViT
         x_reshaped = x.view(batch_size * seq_len, *x.shape[2:])  # [batch_size*seq_len, channels, height, width]
         
-        # Extract features with ViT or ResNet
-        if isinstance(self.vit, nn.Sequential):  # ResNet fallback
-            vit_features = self.vit(x_reshaped)
-            vit_features = vit_features.view(batch_size * seq_len, -1)  # Flatten features
-        else:  # Original ViT
-            vit_features = self.vit(x_reshaped)  # [batch_size*seq_len, vit_feat_dim]
+        # Extract features with ViT
+        vit_features = self.vit(x_reshaped)  # [batch_size*seq_len, vit_feat_dim]
         
         # Project features
         projected_features = self.projection(vit_features)  # [batch_size*seq_len, hidden_size]

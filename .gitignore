@@ -44,12 +44,15 @@ training/logs/
 *.pb
 *.trt
 
-# Data - Exclude all data directories and files
-data/
+# Data
+data/Cholec80.v5-cholec80-10-2.coco/train/
+data/Cholec80.v5-cholec80-10-2.coco/val/
+data/Cholec80.v5-cholec80-10-2.coco/test/
+data/endoscapes/*
+data/m2cai16-tool-locations/*
+data/videos/*
+!data/videos/.gitkeep
 !data/README.md
-
-# Training archives
-surgical_ai_training.zip
 
 # Generated files
 results/

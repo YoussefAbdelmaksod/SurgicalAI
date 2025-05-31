@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  surgicalai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: surgicalai:latest
+    container_name: surgicalai
+    volumes:
+      # Mount datasets - replace with your local paths
+      - ./data/Cholec80.v5-cholec80-10-2.coco:/app/data/Cholec80.v5-cholec80-10-2.coco
+      - ./data/m2cai16-tool-locations:/app/data/m2cai16-tool-locations
+      - ./data/endoscapes:/app/data/endoscapes
+      - ./data/EndoSurgical:/app/data/EndoSurgical
+      # Mount checkpoints and results
+      - ./training/checkpoints:/app/training/checkpoints
+      - ./training/logs:/app/training/logs
+      - ./evaluation/results:/app/evaluation/results
+    ports:
+      - "8000:8000"  # For web interface
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # Default command runs the application
+    command: python3 app/main.py
+
+  # Service for training
+  train:
+    extends:
+      service: surgicalai
+    container_name: surgicalai-train
+    profiles:
+      - train
+    command: train all
+
+  # Service for evaluation
+  evaluate:
+    extends:
+      service: surgicalai
+    container_name: surgicalai-evaluate
+    profiles:
+      - evaluate
+    command: evaluate all
+
+  # Service for inference
+  inference:
+    extends:
+      service: surgicalai
+    container_name: surgicalai-inference
+    profiles:
+      - inference
+    volumes:
+      - ./data/videos:/app/data/videos
+    command: inference /app/data/videos/test_video.mp4 
