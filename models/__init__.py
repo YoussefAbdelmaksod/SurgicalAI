@@ -17,8 +17,9 @@ from .tool_detection import AdvancedToolDetectionModel, ToolDetectionEnsemble, g
 from .mistake_detection import SurgicalMistakeDetector, GPTSurgicalAssistant, get_mistake_detector_model
 from .ensemble import ModelEnsemble, MultiModalFusion
 from .base_model import BaseModel
-from .voice_assistant import VoiceAssistant
-from .gpt_guidance import GPTGuidance
+# Temporarily comment out due to indentation error
+# from .voice_assistant import VoiceAssistant
+from .gpt_guidance import SurgicalGPTGuidance
 
 # Define the paths to model weights
 WEIGHTS_DIR = Path(__file__).parent / "weights"

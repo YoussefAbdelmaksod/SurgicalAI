@@ -199,10 +199,10 @@ class SurgicalAISystem:
             # Try to load pretrained weights
             if os.path.exists(phase_model_path):
                 self.logger.info(f"Loading pretrained weights from {phase_model_path}")
-        self.phase_model = ViTLSTM(
+                self.phase_model = ViTLSTM(
                     num_classes=len(CHOLECYSTECTOMY_PHASES),
                     pretrained=True
-        ).to(self.device)
+                ).to(self.device)
                 self.phase_model.load_state_dict(torch.load(phase_model_path, map_location=self.device))
             else:
                 # Fall back to base model if no weights found
@@ -219,14 +219,14 @@ class SurgicalAISystem:
         self.tool_model = None
         try:
             # Use ensemble if requested
-        if use_ensemble:
+            if use_ensemble:
                 self.logger.info("Using ensemble model for tool detection")
-            self.tool_model = ToolDetectionEnsemble(
+                self.tool_model = ToolDetectionEnsemble(
                     config=self.config['model']['tool_detection'],
                     device=self.device
                 )
-        else:
-            self.tool_model = AdvancedToolDetectionModel(
+            else:
+                self.tool_model = AdvancedToolDetectionModel(
                     config=self.config['model']['tool_detection'],
                     device=self.device
                 )
@@ -242,7 +242,7 @@ class SurgicalAISystem:
         self.logger.info("Loading mistake detection model...")
         self.mistake_model = None
         try:
-        self.mistake_model = SurgicalMistakeDetector(
+            self.mistake_model = SurgicalMistakeDetector(
                 config=self.config['model']['mistake_detection'],
                 device=self.device
             )
@@ -636,10 +636,10 @@ class SurgicalAISystem:
             return {"error": "Models not initialized"}
         
         # Acquire lock to prevent concurrent inference
-            with self.inference_lock:
-                try:
+        with self.inference_lock:
+            try:
                 # Preprocess frame
-                    frame_tensor = self.preprocess_frame(frame)
+                frame_tensor = self.preprocess_frame(frame)
                 
                 # Update frame buffer
                 self.update_frame_buffer(frame_tensor)
@@ -670,7 +670,7 @@ class SurgicalAISystem:
                         self.phase_model.eval()
                         
                         # Perform inference
-                    with torch.no_grad():
+                        with torch.no_grad():
                             phase_results = self.phase_model.predict(sequence, smooth=True)
                         
                         # Get phase index and name
@@ -698,7 +698,7 @@ class SurgicalAISystem:
                             self.logger.info(f"Phase changed to {phase_name} with confidence {phase_confidence:.2f}")
                         
                         # Add results
-                                results['phase'] = {
+                        results['phase'] = {
                             'name': phase_name,
                             'confidence': phase_confidence,
                             'index': int(phase_index),
@@ -783,31 +783,31 @@ class SurgicalAISystem:
                                 adjusted_confidence = min(mistake_confidence * risk_multiplier, 1.0)
                                 
                                 if adjusted_confidence > 0.5:  # Confidence threshold
-                                        results['mistake'] = {
-                                            'name': mistake_results['mistake_names'][0],
+                                    results['mistake'] = {
+                                        'name': mistake_results['mistake_names'][0],
                                         'confidence': float(adjusted_confidence),
-                                            'risk_description': mistake_results['risk_descriptions'][0]
-                                        }
-                                        
-                                        # Generate explanation
-                                        explanation = self.mistake_model.explain_prediction(
-                                            mistake_results['mistake_indices'][0],
-                                            mistake_results['risk_levels'][0]
-                                        )
-                                        
-                                        results['mistake']['explanation'] = explanation
+                                        'risk_description': mistake_results['risk_descriptions'][0]
+                                    }
                                     
-                                    # Add specific guidance for cholecystectomy mistakes
-                                    if self.current_phase == 'calot_triangle_dissection':
-                                        results['mistake']['guidance'] = "Ensure critical view of safety before proceeding."
-                                    elif self.current_phase == 'clipping_and_cutting':
-                                        results['mistake']['guidance'] = "Confirm proper clip placement before cutting."
-                            except Exception as e:
-                                self.logger.error(f"Mistake detection failed: {str(e)}")
+                                    # Generate explanation
+                                    explanation = self.mistake_model.explain_prediction(
+                                        mistake_results['mistake_indices'][0],
+                                        mistake_results['risk_levels'][0]
+                                    )
+                                    
+                                    results['mistake']['explanation'] = explanation
+                                
+                                # Add specific guidance for cholecystectomy mistakes
+                                if self.current_phase == 'calot_triangle_dissection':
+                                    results['mistake']['guidance'] = "Ensure critical view of safety before proceeding."
+                                elif self.current_phase == 'clipping_and_cutting':
+                                    results['mistake']['guidance'] = "Confirm proper clip placement before cutting."
+                        except Exception as e:
+                            self.logger.error(f"Mistake detection failed: {str(e)}")
                         
                 return results
             
-                            except Exception as e:
+            except Exception as e:
                 self.logger.error(f"Frame analysis failed: {str(e)}")
                 return {"error": str(e)}
     

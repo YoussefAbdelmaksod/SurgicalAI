@@ -11,8 +11,41 @@ import logging
 import datetime
 from typing import Dict, List, Optional, Union, Any
 from pathlib import Path
+from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+class ExperienceLevel(Enum):
+    """Enumeration for surgeon experience levels."""
+    NOVICE = 1
+    JUNIOR = 2 
+    INTERMEDIATE = 3
+    SENIOR = 4
+    EXPERT = 5
+    
+    @classmethod
+    def from_string(cls, level_str: str):
+        """Convert string representation to enum value."""
+        mapping = {
+            "novice": cls.NOVICE,
+            "junior": cls.JUNIOR,
+            "intermediate": cls.INTERMEDIATE,
+            "senior": cls.SENIOR,
+            "expert": cls.EXPERT
+        }
+        return mapping.get(level_str.lower(), cls.INTERMEDIATE)
+    
+    @classmethod
+    def to_string(cls, level):
+        """Convert enum value to string representation."""
+        mapping = {
+            cls.NOVICE: "novice",
+            cls.JUNIOR: "junior",
+            cls.INTERMEDIATE: "intermediate",
+            cls.SENIOR: "senior",
+            cls.EXPERT: "expert"
+        }
+        return mapping.get(level, "intermediate")
 
 class UserProfile:
     """

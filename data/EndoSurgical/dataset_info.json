@@ -1,0 +1,11 @@
+{
+  "name": "EndoSurgical",
+  "description": "CholecSeg8k: A semantic segmentation dataset for laparoscopic cholecystectomy",
+  "num_images": 963,
+  "num_videos": 17,
+  "splits": {
+    "train": 624,
+    "val": 85,
+    "test": 254
+  }
+}

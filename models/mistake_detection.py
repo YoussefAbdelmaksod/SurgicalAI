@@ -15,6 +15,7 @@ from typing import List, Dict, Tuple, Optional, Union
 import json
 import os
 import torchvision.models as models
+import timm
 
 logger = logging.getLogger(__name__)
 
@@ -78,13 +79,14 @@ class MultiModalFusion(nn.Module):
     """
     Multi-modal fusion module for combining visual and tool features.
     """
-    def __init__(self, visual_dim=768, tool_dim=128, output_dim=256, dropout=0.3):
+    def __init__(self, visual_dim=768, tool_dim=128, segmentation_dim=128, output_dim=256, dropout=0.3):
         """
         Initialize multi-modal fusion module.
         
         Args:
             visual_dim: Dimension of visual features
             tool_dim: Dimension of tool features
+            segmentation_dim: Dimension of segmentation features
             output_dim: Output dimension
             dropout: Dropout rate
         """
@@ -93,25 +95,27 @@ class MultiModalFusion(nn.Module):
         # Projection layers
         self.visual_projection = nn.Linear(visual_dim, output_dim)
         self.tool_projection = nn.Linear(tool_dim, output_dim)
+        self.segmentation_projection = nn.Linear(segmentation_dim, output_dim)
         
         # Cross-modal attention
         self.cross_attention = CrossModalAttention(output_dim, output_dim, dropout)
         
         # Final fusion layer
         self.fusion_layer = nn.Sequential(
-            nn.Linear(output_dim * 2, output_dim),
+            nn.Linear(output_dim * 3, output_dim),
             nn.LayerNorm(output_dim),
             nn.ReLU(),
             nn.Dropout(dropout)
         )
     
-    def forward(self, visual_features, tool_features):
+    def forward(self, visual_features, tool_features, segmentation_features):
         """
         Forward pass for multi-modal fusion.
         
         Args:
             visual_features: Visual features [batch_size, visual_dim]
             tool_features: Tool features [batch_size, tool_dim]
+            segmentation_features: Segmentation features [batch_size, segmentation_dim]
             
         Returns:
             Fused features [batch_size, output_dim]
@@ -119,12 +123,14 @@ class MultiModalFusion(nn.Module):
         # Project features
         visual_proj = self.visual_projection(visual_features)
         tool_proj = self.tool_projection(tool_features)
+        segmentation_proj = self.segmentation_projection(segmentation_features)
         
         # Apply cross-modal attention
         visual_attended = self.cross_attention(visual_proj, tool_proj)
+        tool_attended = self.cross_attention(tool_proj, segmentation_proj)
         
         # Concatenate and fuse
-        concat_features = torch.cat([visual_attended, tool_proj], dim=1)
+        concat_features = torch.cat([visual_attended, tool_attended, segmentation_proj], dim=1)
         fused_features = self.fusion_layer(concat_features)
         
         return fused_features
@@ -306,10 +312,10 @@ class TemporalAttention(nn.Module):
 
 class SurgicalMistakeDetector(nn.Module):
     """
-    Model for detecting surgical mistakes and assessing their risk level.
+    Surgical mistake detection model.
     
-    This model combines visual features from video frames with tool detection information
-    to identify potential mistakes in laparoscopic surgery.
+    This model identifies potential mistakes and assesses risk levels
+    during laparoscopic procedures.
     """
     
     def __init__(self, 
@@ -324,137 +330,217 @@ class SurgicalMistakeDetector(nn.Module):
         Args:
             visual_dim: Dimension of visual features
             tool_dim: Dimension of tool features
-            hidden_dim: Dimension of hidden layers
+            hidden_dim: Hidden dimension
             num_classes: Number of mistake classes
-            use_temporal: Whether to use temporal attention
+            use_temporal: Whether to use temporal context
         """
         super().__init__()
         
-        # Feature dimensions
         self.visual_dim = visual_dim
         self.tool_dim = tool_dim
         self.hidden_dim = hidden_dim
         self.num_classes = num_classes
         self.use_temporal = use_temporal
         
-        # Visual feature extraction (using ViT features)
-        self.visual_encoder = nn.Sequential(
-            nn.Linear(visual_dim, hidden_dim),
-            nn.ReLU(),
-            nn.LayerNorm(hidden_dim),
-            nn.Dropout(0.3)
+        # Visual feature extractor (ViT backbone)
+        self.visual_extractor = timm.create_model(
+            'vit_base_patch16_224', 
+            pretrained=True, 
+            num_classes=0
         )
         
-        # Tool feature encoding
-        self.tool_encoder = nn.Sequential(
-            nn.Linear(tool_dim, hidden_dim // 2),
+        # Segmentation feature processor - new addition
+        self.use_segmentation = True
+        self.segmentation_dim = 128
+        self.segmentation_processor = nn.Sequential(
+            nn.Conv2d(13, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.LayerNorm(hidden_dim // 2),
-            nn.Dropout(0.2)
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((4, 4)),
+            nn.Flatten(),
+            nn.Linear(64 * 4 * 4, self.segmentation_dim)
         )
         
-        # Combine visual and tool features
-        self.combined_dim = hidden_dim + hidden_dim // 2
+        # Multimodal fusion
+        if self.use_segmentation:
+            self.fusion = MultiModalFusion(
+                visual_dim=visual_dim,
+                tool_dim=tool_dim,
+                segmentation_dim=self.segmentation_dim,
+                output_dim=hidden_dim
+            )
+        else:
+            self.fusion = MultiModalFusion(
+                visual_dim=visual_dim,
+                tool_dim=tool_dim,
+                output_dim=hidden_dim
+            )
         
-        # Temporal attention if enabled
+        # Temporal context processor
         if use_temporal:
-            self.temporal_attention = TemporalAttention(self.combined_dim)
+            self.temporal_processor = TemporalContextProcessor(
+                input_dim=hidden_dim,
+                hidden_dim=hidden_dim
+            )
         
         # Classification head
         self.classifier = nn.Sequential(
-            nn.Linear(self.combined_dim, hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.LayerNorm(hidden_dim // 2),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(hidden_dim, num_classes)
+            nn.Linear(hidden_dim // 2, num_classes)
         )
-        
-        # Risk level regression
-        self.risk_regressor = nn.Sequential(
-            nn.Linear(self.combined_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(hidden_dim, 1),
-            nn.Sigmoid()  # Output between 0 and 1
-        )
-        
-    def forward(self, x, tool_features=None):
+    
+    def forward(self, x, tool_features=None, segmentation_masks=None):
         """
         Forward pass.
         
         Args:
-            x: Input video frames tensor of shape [batch_size, seq_len, channels, height, width]
-               or pre-extracted visual features of shape [batch_size, seq_len, visual_dim]
-            tool_features: Optional tool detection features of shape [batch_size, seq_len, tool_dim]
+            x: Input tensor [batch_size, seq_len, channels, height, width]
+               or [batch_size, channels, height, width] when use_temporal=False
+            tool_features: Optional tool features
+            segmentation_masks: Optional segmentation masks
             
         Returns:
-            Tuple of (mistake_logits, risk_level)
-            - mistake_logits: Logits for mistake classification [batch_size, num_classes]
-            - risk_level: Risk level assessment [batch_size, 1]
+            Class logits
         """
-        batch_size, seq_len = x.shape[:2]
-        
-        # If input is raw video frames, extract features
-        # Otherwise, assume input is already pre-extracted features
-        if len(x.shape) > 3:  # Input is [batch_size, seq_len, channels, height, width]
-            # We'll use pre-extracted features in this implementation
-            # Placeholder for feature extraction from raw frames
-            # In a real implementation, this would use a CNN or ViT to extract features
-            raise NotImplementedError("Raw frame processing not implemented. Please provide pre-extracted features.")
-        
-        # Process visual features
-        visual_features = self.visual_encoder(x)  # [batch_size, seq_len, hidden_dim]
+        # Process input based on shape
+        if self.use_temporal and len(x.shape) == 5:
+            batch_size, seq_len, c, h, w = x.shape
             
-        # Process tool features if provided
-        if tool_features is not None:
-            tool_encoded = self.tool_encoder(tool_features)  # [batch_size, seq_len, hidden_dim//2]
-            # Combine visual and tool features
-            combined_features = torch.cat([visual_features, tool_encoded], dim=-1)  # [batch_size, seq_len, combined_dim]
+            # Reshape for feature extraction
+            x_reshaped = x.reshape(batch_size * seq_len, c, h, w)
+            
+            # Extract visual features
+            visual_features = self.visual_extractor(x_reshaped)  # [batch_size*seq_len, visual_dim]
+            
+            # Process tool features if provided
+            if tool_features is not None:
+                if len(tool_features.shape) == 3:
+                    # [batch_size, seq_len, tool_dim]
+                    tool_features_reshaped = tool_features.reshape(batch_size * seq_len, -1)
+                else:
+                    # [batch_size*seq_len, tool_dim]
+                    tool_features_reshaped = tool_features
+            else:
+                # Create zero tensor if tool features not provided
+                tool_features_reshaped = torch.zeros(batch_size * seq_len, self.tool_dim, device=x.device)
+            
+            # Process segmentation masks if provided
+            if segmentation_masks is not None and self.use_segmentation:
+                if len(segmentation_masks.shape) == 5:
+                    # [batch_size, seq_len, num_classes, height, width]
+                    seg_batch_size, seg_seq_len = segmentation_masks.shape[:2]
+                    seg_reshaped = segmentation_masks.reshape(seg_batch_size * seg_seq_len, 
+                                                             segmentation_masks.shape[2],
+                                                             segmentation_masks.shape[3],
+                                                             segmentation_masks.shape[4])
+                else:
+                    # [batch_size*seq_len, num_classes, height, width]
+                    seg_reshaped = segmentation_masks
+                
+                # Extract segmentation features
+                segmentation_features = self.segmentation_processor(seg_reshaped.float())
+            else:
+                # Create zero tensor if segmentation masks not provided
+                segmentation_features = torch.zeros(batch_size * seq_len, self.segmentation_dim, device=x.device)
+            
+            # Fuse features
+            if self.use_segmentation and segmentation_masks is not None:
+                fused_features = self.fusion(visual_features, tool_features_reshaped, segmentation_features)
+            else:
+                fused_features = self.fusion(visual_features, tool_features_reshaped)
+            
+            # Reshape back to sequence
+            fused_features = fused_features.reshape(batch_size, seq_len, -1)
+            
+            # Process temporal context
+            temporal_features = self.temporal_processor(fused_features)
+            
+            # Classification
+            logits = self.classifier(temporal_features)
+            
+            return logits
         else:
-            # Use zero tensor for tool features if not provided
-            tool_encoded = torch.zeros(batch_size, seq_len, self.hidden_dim // 2, device=x.device)
-            combined_features = torch.cat([visual_features, tool_encoded], dim=-1)
-        
-        # Apply temporal attention if enabled
-        if self.use_temporal:
-            features = self.temporal_attention(combined_features)  # [batch_size, combined_dim]
-        else:
-            # Use mean pooling across time dimension
-            features = torch.mean(combined_features, dim=1)  # [batch_size, combined_dim]
-        
-        # Predict mistake class
-        mistake_logits = self.classifier(features)  # [batch_size, num_classes]
-        
-        # Predict risk level
-        risk_level = self.risk_regressor(features)  # [batch_size, 1]
-        
-        return mistake_logits, risk_level
-    
-    def predict(self, x, tool_features=None):
+            # Non-temporal processing (single frame)
+            if len(x.shape) == 5:
+                batch_size, seq_len, c, h, w = x.shape
+                x = x.reshape(batch_size * seq_len, c, h, w)
+            
+            # Extract visual features
+            visual_features = self.visual_extractor(x)
+            
+            # Process tool features if provided
+            if tool_features is not None:
+                if len(tool_features.shape) == 3:
+                    # Reshape if needed
+                    tool_features = tool_features.reshape(tool_features.shape[0] * tool_features.shape[1], -1)
+            else:
+                # Create zero tensor if tool features not provided
+                tool_features = torch.zeros(visual_features.shape[0], self.tool_dim, device=x.device)
+            
+            # Process segmentation masks if provided
+            if segmentation_masks is not None and self.use_segmentation:
+                if len(segmentation_masks.shape) == 5:
+                    # Reshape if needed
+                    seg_batch_size, seg_seq_len = segmentation_masks.shape[:2]
+                    segmentation_masks = segmentation_masks.reshape(
+                        seg_batch_size * seg_seq_len,
+                        segmentation_masks.shape[2],
+                        segmentation_masks.shape[3],
+                        segmentation_masks.shape[4]
+                    )
+                
+                # Extract segmentation features
+                segmentation_features = self.segmentation_processor(segmentation_masks.float())
+            else:
+                # Create zero tensor if segmentation masks not provided
+                segmentation_features = torch.zeros(visual_features.shape[0], self.segmentation_dim, device=x.device)
+            
+            # Fuse features
+            if self.use_segmentation and segmentation_masks is not None:
+                fused_features = self.fusion(visual_features, tool_features, segmentation_features)
+            else:
+                fused_features = self.fusion(visual_features, tool_features)
+            
+            # Classification
+            logits = self.classifier(fused_features)
+            
+            return logits
+
+    def predict(self, x, tool_features=None, segmentation_masks=None):
         """
-        Run prediction on input.
+        Make predictions.
         
         Args:
-            x: Input video frames or features
-            tool_features: Optional tool detection features
+            x: Input tensor
+            tool_features: Optional tool features
+            segmentation_masks: Optional segmentation masks
             
         Returns:
-            Dict with prediction results
+            Predicted class and confidence
         """
         self.eval()
         with torch.no_grad():
-            mistake_logits, risk_level = self.forward(x, tool_features)
+            logits = self(x, tool_features, segmentation_masks)
             
-            # Convert logits to probabilities
-            mistake_probs = F.softmax(mistake_logits, dim=-1)
+            # Get predictions
+            if len(logits.shape) == 3:
+                # Sequence output
+                probs = torch.softmax(logits, dim=2)
+                predictions = torch.argmax(probs, dim=2)
+                confidence = torch.max(probs, dim=2)[0]
+            else:
+                # Single frame output
+                probs = torch.softmax(logits, dim=1)
+                predictions = torch.argmax(probs, dim=1)
+                confidence = torch.max(probs, dim=1)[0]
             
-            # Get predicted classes
-            mistake_class = torch.argmax(mistake_probs, dim=-1)
-            
-            return {
-                'mistake_class': mistake_class,
-                'mistake_probs': mistake_probs,
-                'risk_level': risk_level
-            }
+            return predictions, confidence
 
 
 class GPTSurgicalAssistant(nn.Module):

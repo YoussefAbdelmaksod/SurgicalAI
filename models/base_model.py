@@ -9,8 +9,7 @@ import torch
 import torch.nn as nn
 import os
 import logging
-import time
-from typing import Dict, Any, Optional, Union, List
+from typing import Dict, Any, Optional
 from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
@@ -44,7 +43,6 @@ class BaseModel(nn.Module, ABC):
         """
         Forward pass - must be implemented by subclasses.
         """
-        pass
     
     def save_checkpoint(self, directory: str, filename: Optional[str] = None, 
                         save_optimizer: bool = True, optimizer: Optional[torch.optim.Optimizer] = None,

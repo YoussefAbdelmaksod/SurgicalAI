@@ -14,6 +14,7 @@ import queue
 import time
 import random
 from typing import List, Dict, Optional, Union, Any
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -593,10 +594,10 @@ class VoiceAssistant:
                     f"Consider using {missing_tool} for this step.",
                     priority_level="information"
                 )
-        else:
+            else:
                 self.speak(f"Consider using {missing_tool} for this step.", 
                            priority_level="information")
-            
+    
     def notify_critical_view_achieved(self, is_achieved, missing_criteria=None):
         """
         Notify about critical view of safety status.
@@ -643,7 +644,7 @@ class VoiceAssistant:
             if self.user_profile:
                 self.provide_personalized_guidance(message, priority_level="feedback")
             else:
-            self.speak(message, priority_level="feedback")
+                self.speak(message, priority_level="feedback")
             
     def listen_for_command(self):
         """

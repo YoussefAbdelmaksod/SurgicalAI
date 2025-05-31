@@ -72,7 +72,7 @@ def check_datasets():
     if not tool_path.exists():
         logger.warning(f"❌ m2cai16-tool-locations dataset not found at: {tool_path}")
         datasets_ok = False
-        else:
+    else:
         logger.info(f"✅ Found m2cai16-tool-locations dataset at: {tool_path}")
     
     # EndoScapes dataset

@@ -1,3 +1,25 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:1494d3090ab48b244c7bc7a9fadf276290a0d93b18c332ac09e93e5c958cc7ae
-size 148
+"""
+SurgicalAI configuration module.
+
+This module handles configuration loading and management for the SurgicalAI system.
+"""
+
+import os
+import yaml
+from pathlib import Path
+
+def load_config(config_path):
+    """
+    Load configuration from YAML file.
+    
+    Args:
+        config_path: Path to configuration file
+        
+    Returns:
+        Dict with configuration data
+    """
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
+
+# Default configuration path
+DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'default_config.yaml')

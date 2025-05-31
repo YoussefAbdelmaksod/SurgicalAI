@@ -12,6 +12,6 @@ from utils.helpers import (
 
 from utils.user_profiles import (
     UserProfile, 
-    UserProfileManager, 
+    ProfileManager, 
     ExperienceLevel
 )

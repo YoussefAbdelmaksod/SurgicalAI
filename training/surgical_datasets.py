@@ -530,21 +530,55 @@ class MistakeDetectionDataset(Dataset):
         if not image_files:
             return []
         
+        # Load meta.json to understand class mappings
+        meta_file = supplementary_dir / 'meta.json'
+        critical_structures = ['cystic_duct', 'common_bile_duct', 'hepatic_artery', 'gallbladder']
+        class_id_to_name = {}
+        
+        if meta_file.exists():
+            try:
+                with open(meta_file, 'r') as f:
+                    meta_data = json.load(f)
+                    for cls in meta_data.get('classes', []):
+                        class_id_to_name[cls.get('id')] = cls.get('title')
+                logger.info(f"Loaded {len(class_id_to_name)} class definitions from {meta_file}")
+            except Exception as e:
+                logger.warning(f"Failed to load meta.json: {e}")
+        
         # Group into sequences
         sequences = []
-        for i in range(0, len(image_files), self.sequence_length):
-            if i + self.sequence_length > len(image_files):
-                continue
+        current_video = None
+        current_sequence = []
+        
+        for img_file in image_files:
+            # Extract video ID from filename (e.g., video20_frame_3402_endo.png)
+            parts = img_file.stem.split('_')
+            if len(parts) >= 1:
+                video_id = parts[0]
                 
-            sequence_files = image_files[i:i+self.sequence_length]
-            
-            # For supplementary data, we'll use "no mistake" as default label
-            # This can be improved if annotations are available
+                # Start a new sequence when video changes or max length reached
+                if video_id != current_video or len(current_sequence) >= self.sequence_length:
+                    if len(current_sequence) > 0:
+                        if len(current_sequence) == self.sequence_length:
+                            sequences.append({
+                                'supplementary': True,
+                                'image_files': [str(f) for f in current_sequence],
+                                'mistakes': self._analyze_annotations(current_sequence, ann_dir, class_id_to_name, critical_structures)
+                            })
+                        current_sequence = []
+                    current_video = video_id
+                
+                current_sequence.append(img_file)
+        
+        # Add the last sequence if it has enough frames
+        if len(current_sequence) == self.sequence_length:
             sequences.append({
                 'supplementary': True,
-                'image_files': [str(f) for f in sequence_files],
-                'mistakes': [{'class': 0, 'severity': 0} for _ in range(self.sequence_length)]
+                'image_files': [str(f) for f in current_sequence],
+                'mistakes': self._analyze_annotations(current_sequence, ann_dir, class_id_to_name, critical_structures)
             })
+            
+        logger.info(f"Loaded {len(sequences)} sequences from supplementary data")
             
         # Only use a portion for training to balance with main dataset
         if self.split == 'train':
@@ -559,6 +593,87 @@ class MistakeDetectionDataset(Dataset):
             sequences = sequences[split_idx:]
             
         return sequences
+    
+    def _analyze_annotations(self, image_files, ann_dir, class_id_to_name, critical_structures):
+        """
+        Analyze annotation files to determine if there are potential mistakes
+        based on proximity of instruments to critical structures.
+        
+        Args:
+            image_files: List of image file paths
+            ann_dir: Directory containing annotation files
+            class_id_to_name: Mapping from class IDs to class names
+            critical_structures: List of critical structure names
+            
+        Returns:
+            List of mistake information dicts
+        """
+        mistakes = []
+        
+        for img_file in image_files:
+            img_name = Path(img_file).name
+            ann_file = Path(ann_dir) / f"{img_name}.json"
+            
+            # Default: no mistake
+            mistake_info = {'class': 0, 'severity': 0.0}
+            
+            if ann_file.exists():
+                try:
+                    with open(ann_file, 'r') as f:
+                        annotation = json.load(f)
+                    
+                    # Extract objects from annotation
+                    objects = annotation.get('objects', [])
+                    
+                    # Check for instrument and critical structure proximity
+                    instruments = []
+                    critical_structs = []
+                    
+                    for obj in objects:
+                        class_title = obj.get('classTitle', '')
+                        class_id = obj.get('classId')
+                        
+                        # Also try to get class name from ID if title is not descriptive
+                        if class_id in class_id_to_name:
+                            class_title = class_id_to_name[class_id]
+                            
+                        # Identify instruments
+                        if 'grasper' in class_title.lower() or 'hook' in class_title.lower() or 'cautery' in class_title.lower():
+                            instruments.append(obj)
+                            
+                        # Identify critical structures
+                        for critical in critical_structures:
+                            if critical in class_title.lower():
+                                critical_structs.append(obj)
+                    
+                    # If we have both instruments and critical structures in the frame
+                    if instruments and critical_structs:
+                        # This is a situation where there's potential for a mistake
+                        # Set a low risk (class 1) by default when critical structures are visible with instruments
+                        mistake_info['class'] = 1
+                        mistake_info['severity'] = 0.3
+                        
+                        # Check for close proximity (a simplified approach)
+                        # In a real implementation, you'd do more sophisticated spatial analysis
+                        for instrument in instruments:
+                            if 'hook' in instrument.get('classTitle', '').lower() or 'cautery' in instrument.get('classTitle', '').lower():
+                                # Higher risk for electrocautery near critical structures
+                                mistake_info['class'] = 1
+                                mistake_info['severity'] = max(mistake_info['severity'], 0.5)
+                                
+                                # Look for very specific high-risk scenarios like cautery near cystic duct
+                                for struct in critical_structs:
+                                    if 'cystic_duct' in struct.get('classTitle', '').lower() or 'bile_duct' in struct.get('classTitle', '').lower():
+                                        # Even higher risk for cautery near bile ducts
+                                        mistake_info['class'] = 2  # High risk
+                                        mistake_info['severity'] = 0.8
+                    
+                except Exception as e:
+                    logger.warning(f"Error processing annotation file {ann_file}: {e}")
+            
+            mistakes.append(mistake_info)
+            
+        return mistakes
     
     def _add_synthetic_data(self):
         """
@@ -618,7 +733,7 @@ class MistakeDetectionDataset(Dataset):
             idx: Index of the sequence
             
         Returns:
-            Dict with 'frames' tensor and 'mistakes' tensor
+            Dict with 'frames' tensor, 'mistakes' tensor, and optional 'masks' tensor
         """
         sequence = self.sequences[idx]
         
@@ -626,12 +741,54 @@ class MistakeDetectionDataset(Dataset):
         if 'supplementary' in sequence and sequence['supplementary']:
             # Load frames from image files for supplementary data
             frames = []
-            for img_path in sequence['image_files']:
+            masks = []
+            for i, img_path in enumerate(sequence['image_files']):
                 img = cv2.imread(img_path)
                 if img is None:
                     raise ValueError(f"Could not read image: {img_path}")
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 frames.append(img)
+                
+                # Try to extract segmentation masks from annotation
+                try:
+                    ann_path = img_path.replace('/img/', '/ann/') + '.json'
+                    with open(ann_path, 'r') as f:
+                        annotation = json.load(f)
+                    
+                    # Create a mask with 13 channels (one for each class)
+                    h, w = img.shape[:2]
+                    mask = np.zeros((13, h, w), dtype=np.uint8)
+                    
+                    # Parse objects and create mask layers
+                    for obj in annotation.get('objects', []):
+                        class_id = obj.get('classId')
+                        if class_id is None:
+                            continue
+                            
+                        # Map to channel index (class IDs are not sequential)
+                        # For simplicity, just mod by 13 - in real implementation, use a proper mapping
+                        channel_idx = (class_id - 6551907) % 13
+                        
+                        # Get bitmap data
+                        bitmap_data = obj.get('bitmap', {})
+                        if bitmap_data:
+                            origin = bitmap_data.get('origin', [0, 0])
+                            bitmap = self._decode_bitmap(bitmap_data.get('data', ''))
+                            if bitmap is not None:
+                                # Place bitmap at the correct position
+                                bh, bw = bitmap.shape
+                                x, y = origin
+                                x_end = min(x + bw, w)
+                                y_end = min(y + bh, h)
+                                if x < w and y < h:
+                                    mask[channel_idx, y:y_end, x:x_end] = bitmap[:y_end-y, :x_end-x]
+                    
+                    masks.append(mask)
+                except Exception as e:
+                    # If mask extraction fails, add a blank mask
+                    h, w = img.shape[:2]
+                    masks.append(np.zeros((13, h, w), dtype=np.uint8))
+                    logger.warning(f"Failed to extract mask for {img_path}: {e}")
         else:
             # Load frames from video
             video_path = sequence['video_path']
@@ -653,6 +810,7 @@ class MistakeDetectionDataset(Dataset):
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     frames.append(frame)
             cap.release()
+            masks = None
         
         # Process frames
         tensor_frames = []
@@ -668,10 +826,67 @@ class MistakeDetectionDataset(Dataset):
         # Get mistake labels
         mistake_labels = torch.tensor([m['class'] for m in sequence['mistakes']], dtype=torch.long)
         
-        return {
+        result = {
             'frames': tensor_frames,
             'mistakes': mistake_labels
         }
+        
+        # Add masks if available
+        if 'supplementary' in sequence and sequence['supplementary'] and masks:
+            # Convert masks to tensor
+            tensor_masks = []
+            for mask in masks:
+                # Resize masks to match the image size after transformations
+                resized_mask = []
+                for i in range(mask.shape[0]):
+                    # Use PIL for consistent resizing with the image transform
+                    m = Image.fromarray(mask[i])
+                    m = m.resize(self.img_size, Image.NEAREST)
+                    resized_mask.append(np.array(m))
+                
+                tensor_mask = torch.from_numpy(np.stack(resized_mask))
+                tensor_masks.append(tensor_mask)
+            
+            # Stack masks along sequence dimension [sequence_length, num_classes, height, width]
+            tensor_masks = torch.stack(tensor_masks)
+            result['masks'] = tensor_masks
+        
+        return result
+        
+    def _decode_bitmap(self, data):
+        """
+        Decode base64 encoded bitmap data from annotation files.
+        
+        Args:
+            data: Base64 encoded bitmap data
+            
+        Returns:
+            Decoded bitmap as numpy array or None if decoding fails
+        """
+        try:
+            import base64
+            import zlib
+            
+            # Decode base64
+            decoded = base64.b64decode(data)
+            
+            # PNG format - use OpenCV to decode
+            import cv2
+            import numpy as np
+            
+            # Convert to numpy array from bytes
+            nparr = np.frombuffer(decoded, np.uint8)
+            
+            # Decode PNG
+            img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+            
+            # Binarize the image
+            _, binary = cv2.threshold(img, 127, 1, cv2.THRESH_BINARY)
+            
+            return binary
+        except Exception as e:
+            logger.warning(f"Failed to decode bitmap data: {e}")
+            return None
 
     def _get_mistake_at_frame(self, annotations, frame_idx):
         """

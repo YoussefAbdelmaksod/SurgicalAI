@@ -263,184 +263,229 @@ class MistakeDetectionTrainer:
     
     def _train_epoch(self, epoch):
         """
-        Train for one epoch.
+        Train the model for one epoch.
         
         Args:
             epoch: Current epoch number
             
         Returns:
-            Tuple of (loss, accuracy, f1_score)
+            Average loss and metrics for the epoch
         """
         self.model.train()
         
-        running_loss = 0.0
-        running_loss_cls = 0.0
-        running_loss_reg = 0.0
+        total_loss = 0.0
         all_preds = []
         all_labels = []
         
-        # Use tqdm for progress bar
-        dataloader = self.dataloaders['train']
-        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1} (Train)")
+        # Use tqdm to show progress bar
+        train_loader = self.dataloaders['train']
+        pbar = tqdm(train_loader, desc=f'Epoch {epoch} [Train]')
         
-        for i, batch in enumerate(pbar):
-            # Get data
-            frames = batch['frames'].to(self.device)  # [batch_size, seq_len, 3, H, W]
-            mistake_type = batch['mistake_type'].to(self.device)  # [batch_size]
-            risk_level = batch['risk_level'].to(self.device)  # [batch_size]
+        for batch_idx, batch in enumerate(pbar):
+            # Get data and move to device
+            frames = batch['frames'].to(self.device)  # [batch_size, seq_len, C, H, W]
+            labels = batch['mistakes'].to(self.device)  # [batch_size, seq_len]
+            
+            # Check if masks are available (from EndoSurgical dataset)
+            masks = None
+            if 'masks' in batch:
+                masks = batch['masks'].to(self.device)  # [batch_size, seq_len, num_classes, H, W]
             
             # Zero gradients
             self.optimizer.zero_grad()
             
             # Forward pass with mixed precision
             with amp.autocast(enabled=self.config['general']['mixed_precision']):
-                # Forward pass through model
-                logits, risk_pred = self.model(frames)
+                # If we have masks, use them as additional input
+                if masks is not None:
+                    # Reshape for batch processing
+                    b, s, c, h, w = frames.shape
+                    bm, sm, cm, hm, wm = masks.shape
+                    
+                    # Flatten batch and sequence dimensions for processing
+                    frames_flat = frames.view(b * s, c, h, w)
+                    masks_flat = masks.view(bm * sm, cm, hm, wm)
+                    
+                    # Create dummy tool features (since we don't have tool detections for supplementary data)
+                    # This depends on your model's architecture
+                    tool_features_flat = None
+                    
+                    # Get predictions
+                    outputs_flat = self.model(frames_flat, tool_features=tool_features_flat, segmentation_masks=masks_flat)
+                    
+                    # Reshape back to batch and sequence dimensions
+                    outputs = outputs_flat.view(b, s, -1)
+                else:
+                    # Standard forward pass without masks
+                    outputs = self.model(frames)  # [batch_size, seq_len, num_classes]
                 
-                # Compute loss
-                loss_cls = self.classification_criterion(logits, mistake_type)
-                loss_reg = self.regression_criterion(risk_pred, risk_level)
+                # Reshape for loss calculation
+                b, s, c = outputs.shape
+                outputs_flat = outputs.reshape(-1, c)
+                labels_flat = labels.reshape(-1)
                 
-                # Combined loss
-                loss = loss_cls + 0.5 * loss_reg
+                # Calculate loss
+                loss = self.classification_criterion(outputs_flat, labels_flat)
             
-            # Backward pass with mixed precision
+            # Backward pass with scaled gradients
             self.scaler.scale(loss).backward()
+            
+            # Gradient clipping
+            if 'grad_clip' in self.config['mistake_detection']['training']:
+                clip_value = self.config['mistake_detection']['training']['grad_clip']
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip_value)
+            
+            # Update weights with scaled gradients
             self.scaler.step(self.optimizer)
             self.scaler.update()
             
+            # Update total loss
+            total_loss += loss.item()
+            
+            # Get predictions
+            preds = torch.argmax(outputs_flat, dim=1).detach().cpu().numpy()
+            
             # Update metrics
-            running_loss += loss.item()
-            running_loss_cls += loss_cls.item()
-            running_loss_reg += loss_reg.item()
-            
-            # Calculate accuracy and F1 score
-            probs = torch.softmax(logits, dim=1)
-            preds = torch.argmax(probs, dim=1).cpu().numpy()
-            labels = mistake_type.cpu().numpy()
-            
             all_preds.extend(preds)
-            all_labels.extend(labels)
+            all_labels.extend(labels_flat.detach().cpu().numpy())
             
             # Update progress bar
-            pbar.set_postfix({
-                'loss': f"{running_loss / (i+1):.4f}"
-            })
+            pbar.set_postfix({'loss': loss.item()})
             
-            # Log training loss
-            if i % self.config['general']['log_interval'] == 0:
-                step = epoch * len(dataloader) + i
-                self.writer.add_scalar('Loss/train_step', loss.item(), step)
-                self.writer.add_scalar('Loss/cls_step', loss_cls.item(), step)
-                self.writer.add_scalar('Loss/reg_step', loss_reg.item(), step)
-                self.writer.add_scalar('LR', self.optimizer.param_groups[0]['lr'], step)
+            # Log to tensorboard at intervals
+            log_interval = self.config['general']['log_interval']
+            if batch_idx % log_interval == 0:
+                iteration = epoch * len(train_loader) + batch_idx
+                self.writer.add_scalar('train/loss', loss.item(), iteration)
         
-        # Calculate epoch metrics
-        avg_loss = running_loss / len(dataloader)
-        avg_loss_cls = running_loss_cls / len(dataloader)
-        avg_loss_reg = running_loss_reg / len(dataloader)
+        # Calculate metrics
         accuracy = accuracy_score(all_labels, all_preds)
         f1 = f1_score(all_labels, all_preds, average='macro')
+        avg_loss = total_loss / len(train_loader)
         
-        # Log epoch metrics
-        self.writer.add_scalar('Loss/train', avg_loss, epoch)
-        self.writer.add_scalar('Loss/cls', avg_loss_cls, epoch)
-        self.writer.add_scalar('Loss/reg', avg_loss_reg, epoch)
-        self.writer.add_scalar('Accuracy/train', accuracy, epoch)
-        self.writer.add_scalar('F1/train', f1, epoch)
+        # Log metrics
+        self.writer.add_scalar('train/accuracy', accuracy, epoch)
+        self.writer.add_scalar('train/f1_score', f1, epoch)
+        self.writer.add_scalar('train/loss', avg_loss, epoch)
         
-        logger.info(f"Epoch {epoch+1} (Train): Loss: {avg_loss:.4f}, Acc: {accuracy:.4f}, F1: {f1:.4f}")
+        # Log learning rate
+        for i, param_group in enumerate(self.optimizer.param_groups):
+            self.writer.add_scalar(f'train/lr_group_{i}', param_group['lr'], epoch)
+        
+        logger.info(f"Epoch {epoch} [Train] - Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}, F1: {f1:.4f}")
+        
+        # Update learning rate scheduler
+        if self.scheduler is not None:
+            if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                # For ReduceLROnPlateau, we update based on validation metrics
+                pass
+            else:
+                self.scheduler.step()
         
         return avg_loss, accuracy, f1
     
     def _validate_epoch(self, epoch):
         """
-        Validate for one epoch.
+        Validate the model for one epoch.
         
         Args:
             epoch: Current epoch number
             
         Returns:
-            Tuple of (loss, accuracy, f1_score, confusion_matrix)
+            Average validation loss and metrics
         """
         self.model.eval()
         
-        running_loss = 0.0
-        running_loss_cls = 0.0
-        running_loss_reg = 0.0
+        total_loss = 0.0
         all_preds = []
         all_labels = []
-        all_risk_preds = []
-        all_risk_levels = []
         
-        # Use tqdm for progress bar
-        dataloader = self.dataloaders['val']
-        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1} (Val)")
+        # Use tqdm to show progress bar
+        val_loader = self.dataloaders['val']
+        pbar = tqdm(val_loader, desc=f'Epoch {epoch} [Val]')
         
         with torch.no_grad():
-            for i, batch in enumerate(pbar):
-                # Get data
-                frames = batch['frames'].to(self.device)  # [batch_size, seq_len, 3, H, W]
-                mistake_type = batch['mistake_type'].to(self.device)  # [batch_size]
-                risk_level = batch['risk_level'].to(self.device)  # [batch_size]
+            for batch in pbar:
+                # Get data and move to device
+                frames = batch['frames'].to(self.device)  # [batch_size, seq_len, C, H, W]
+                labels = batch['mistakes'].to(self.device)  # [batch_size, seq_len]
+                
+                # Check if masks are available (from EndoSurgical dataset)
+                masks = None
+                if 'masks' in batch:
+                    masks = batch['masks'].to(self.device)  # [batch_size, seq_len, num_classes, H, W]
                 
                 # Forward pass with mixed precision
                 with amp.autocast(enabled=self.config['general']['mixed_precision']):
-                    # Forward pass through model
-                    logits, risk_pred = self.model(frames)
+                    # If we have masks, use them as additional input
+                    if masks is not None:
+                        # Reshape for batch processing
+                        b, s, c, h, w = frames.shape
+                        bm, sm, cm, hm, wm = masks.shape
+                        
+                        # Flatten batch and sequence dimensions for processing
+                        frames_flat = frames.view(b * s, c, h, w)
+                        masks_flat = masks.view(bm * sm, cm, hm, wm)
+                        
+                        # Create dummy tool features (since we don't have tool detections for supplementary data)
+                        # This depends on your model's architecture
+                        tool_features_flat = None
+                        
+                        # Get predictions
+                        outputs_flat = self.model(frames_flat, tool_features=tool_features_flat, segmentation_masks=masks_flat)
+                        
+                        # Reshape back to batch and sequence dimensions
+                        outputs = outputs_flat.view(b, s, -1)
+                    else:
+                        # Standard forward pass without masks
+                        outputs = self.model(frames)  # [batch_size, seq_len, num_classes]
                     
-                    # Compute loss
-                    loss_cls = self.classification_criterion(logits, mistake_type)
-                    loss_reg = self.regression_criterion(risk_pred, risk_level)
+                    # Reshape for loss calculation
+                    b, s, c = outputs.shape
+                    outputs_flat = outputs.reshape(-1, c)
+                    labels_flat = labels.reshape(-1)
                     
-                    # Combined loss
-                    loss = loss_cls + 0.5 * loss_reg
+                    # Calculate loss
+                    loss = self.classification_criterion(outputs_flat, labels_flat)
+                
+                # Update total loss
+                total_loss += loss.item()
+                
+                # Get predictions
+                preds = torch.argmax(outputs_flat, dim=1).detach().cpu().numpy()
                 
                 # Update metrics
-                running_loss += loss.item()
-                running_loss_cls += loss_cls.item()
-                running_loss_reg += loss_reg.item()
-                
-                # Calculate accuracy and F1 score
-                probs = torch.softmax(logits, dim=1)
-                preds = torch.argmax(probs, dim=1).cpu().numpy()
-                labels = mistake_type.cpu().numpy()
-                
                 all_preds.extend(preds)
-                all_labels.extend(labels)
-                
-                # Save risk predictions
-                all_risk_preds.extend(risk_pred.cpu().numpy())
-                all_risk_levels.extend(risk_level.cpu().numpy())
+                all_labels.extend(labels_flat.detach().cpu().numpy())
                 
                 # Update progress bar
-                pbar.set_postfix({
-                    'loss': f"{running_loss / (i+1):.4f}"
-                })
+                pbar.set_postfix({'loss': loss.item()})
         
-        # Calculate epoch metrics
-        avg_loss = running_loss / len(dataloader)
-        avg_loss_cls = running_loss_cls / len(dataloader)
-        avg_loss_reg = running_loss_reg / len(dataloader)
+        # Calculate metrics
         accuracy = accuracy_score(all_labels, all_preds)
         f1 = f1_score(all_labels, all_preds, average='macro')
+        avg_loss = total_loss / len(val_loader)
+        
+        # Compute confusion matrix
         conf_matrix = confusion_matrix(all_labels, all_preds)
         
-        # Log epoch metrics
-        self.writer.add_scalar('Loss/val', avg_loss, epoch)
-        self.writer.add_scalar('Loss/cls_val', avg_loss_cls, epoch)
-        self.writer.add_scalar('Loss/reg_val', avg_loss_reg, epoch)
-        self.writer.add_scalar('Accuracy/val', accuracy, epoch)
-        self.writer.add_scalar('F1/val', f1, epoch)
+        # Log metrics
+        self.writer.add_scalar('val/accuracy', accuracy, epoch)
+        self.writer.add_scalar('val/f1_score', f1, epoch)
+        self.writer.add_scalar('val/loss', avg_loss, epoch)
         
-        # Plot risk level correlation
-        if epoch % 5 == 0:
-            risk_fig = self._plot_risk_correlation(all_risk_preds, all_risk_levels)
-            self.writer.add_figure('Risk Correlation', risk_fig, epoch)
+        # Plot and log confusion matrix
+        cm_fig = self._plot_confusion_matrix(conf_matrix)
+        self.writer.add_figure('val/confusion_matrix', cm_fig, epoch)
         
-        logger.info(f"Epoch {epoch+1} (Val): Loss: {avg_loss:.4f}, Acc: {accuracy:.4f}, F1: {f1:.4f}")
+        logger.info(f"Epoch {epoch} [Val] - Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}, F1: {f1:.4f}")
         
-        return avg_loss, accuracy, f1, conf_matrix
+        # Update scheduler if it's ReduceLROnPlateau
+        if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            self.scheduler.step(f1)
+        
+        return avg_loss, accuracy, f1
     
     def _plot_confusion_matrix(self, conf_matrix):
         """
